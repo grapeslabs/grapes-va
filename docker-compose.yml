@@ -1,0 +1,88 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg15
+    container_name: pacs_postgres
+    environment:
+      POSTGRES_USER: ${PG_USER}
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      POSTGRES_DB: ${PG_DATABASE}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init_db.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - pacs_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: pacs_api
+    environment:
+      - PG_HOST=postgres
+      - PG_PORT=5432
+      - PG_USER=${PG_USER}
+      - PG_PASSWORD=${PG_PASSWORD}
+      - PG_DATABASE=${PG_DATABASE}
+      - API_PORT=${API_PORT}
+      - DEBUG_MODE=${DEBUG_MODE}
+      - PERSON_PHOTOS_PATH=/app/person_photos
+      - MIN_WIDTH_PHOTO=${MIN_WIDTH_PHOTO}
+      - MOTION_MIN_AREA=${MOTION_MIN_AREA}
+      - MOTION_THRESHOLD=${MOTION_THRESHOLD}
+      - MOTION_RECORD_AFTER_TIME=${MOTION_RECORD_AFTER_TIME}
+    ports:
+      - "${API_PORT}:${API_PORT}"
+    volumes:
+      - person_photos:/app/person_photos
+      - thumbnails:/app/thumbnails
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - pacs_network
+
+  core:
+    build:
+      context: .
+      dockerfile: Dockerfile.core
+    container_name: pacs_core
+    environment:
+      - PG_HOST=postgres
+      - PG_PORT=5432
+      - PG_USER=${PG_USER}
+      - PG_PASSWORD=${PG_PASSWORD}
+      - PG_DATABASE=${PG_DATABASE}
+      - PACS_API_URL=http://api:${API_PORT}
+      - THUMBNAIL_PATH=/app/thumbnails
+      - DEBUG_MODE=${DEBUG_MODE}
+      - MIN_WIDTH_PHOTO=${MIN_WIDTH_PHOTO}
+      - EUCLIDEAN_THRESHOLD=${EUCLIDEAN_THRESHOLD}
+      - MAX_FACES_IN_LIST=${MAX_FACES_IN_LIST}
+      - CAMERA_POLL_INTERVAL=${CAMERA_POLL_INTERVAL}
+    volumes:
+      - thumbnails:/app/thumbnails
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_started
+    networks:
+      - pacs_network
+
+volumes:
+  postgres_data:
+  person_photos:
+  thumbnails:
+
+networks:
+  pacs_network:
+    driver: bridge

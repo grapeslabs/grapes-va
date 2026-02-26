@@ -1,0 +1,24 @@
+# Виртуальное окружение
+venv/
+env/
+__pycache__/
+*.pyc
+
+# Файлы с секретами
+.env
+*.log
+
+# Директории с данными (создаются при работе)
+input/
+thumbnails/
+person_photos/
+person_avatars/
+events/
+logs/
+
+# Временные файлы
+*.tmp
+*.swp
+*.swo
+*~
+.DS_Store
