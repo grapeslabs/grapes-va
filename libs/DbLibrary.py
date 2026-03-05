@@ -338,9 +338,36 @@ class FRDatabase:
     ) -> List[Dict]:
         emb_str = self._embedding_to_str(embedding)
         with self._get_cursor(cursor_factory=RealDictCursor) as cursor:
+            # Проверим, есть ли вообще фото у пользователя
             cursor.execute(
-                "SELECT * FROM find_similar_faces(%s::varchar, %s::vector, %s::integer)",
-                (user_id, emb_str, limit),
+                "SELECT COUNT(*) FROM photo JOIN percone USING(person_id) WHERE user_id = %s AND vector128 IS NOT NULL",
+                (user_id,),
+            )
+            count = cursor.fetchone()["count"]
+            if count == 0:
+                # Нет фото для поиска
+                return []
+
+            # Выполняем поиск
+            cursor.execute(
+                """
+                SELECT 
+                    pe.user_id::VARCHAR,
+                    pe.person_id::VARCHAR,
+                    ph.photo_id::VARCHAR,
+                    pe.description::TEXT,
+                    pe.tag::VARCHAR,
+                    (ph.vector128 <-> %s::vector)::FLOAT AS distance
+                FROM photo ph
+                JOIN percone pe ON ph.person_id = pe.person_id
+                WHERE pe.user_id = %s
+                    AND pe.view_percone
+                    AND ph.view_photo
+                    AND ph.vector128 IS NOT NULL
+                ORDER BY distance
+                LIMIT %s
+                """,
+                (emb_str, user_id, limit),
             )
             rows = cursor.fetchall()
             return [
@@ -355,21 +382,27 @@ class FRDatabase:
                 for row in rows
             ]
 
-    def find_or_create_vector(self, embedding: List[float], max_distance: float = 0.9, image_data: str = '') -> Dict:
+    def find_or_create_vector(
+        self, embedding: List[float], max_distance: float = 0.9, image_data: str = ""
+    ) -> Dict:
         emb_str = self._embedding_to_str(embedding)
         new_uuid = str(uuid.uuid4())
         try:
             with self._get_cursor(cursor_factory=DictCursor) as cursor:
                 cursor.execute(
                     "SELECT * FROM find_or_create_by_vector(%s, %s::vector, %s, %s)",
-                    (new_uuid, emb_str, max_distance, image_data)
+                    (new_uuid, emb_str, max_distance, image_data),
                 )
                 result = cursor.fetchone()
                 return {
-                    "id": result['result_uuid'],
-                    "action": result['action_type'],
-                    "distance": result['distance'] if result['distance'] is not None else max_distance,
-                    "status": "success"
+                    "id": result["result_uuid"],
+                    "action": result["action_type"],
+                    "distance": (
+                        result["distance"]
+                        if result["distance"] is not None
+                        else max_distance
+                    ),
+                    "status": "success",
                 }
         except Exception as e:
             return {
@@ -377,7 +410,7 @@ class FRDatabase:
                 "message": str(e),
                 "id": None,
                 "action": None,
-                "distance": max_distance
+                "distance": max_distance,
             }
 
     def process_face_recognition(
@@ -389,7 +422,7 @@ class FRDatabase:
         max_distance: float = 0.9,
         is_real: bool = False,
         is_multiple: bool = False,
-        percent_unknown: float = 79.5,
+        percent_unknown: float = 95,
         image_data: str = "",
     ) -> Tuple[Dict, str]:
         try:
@@ -397,10 +430,14 @@ class FRDatabase:
                 user_id=user_id, embedding=embedding, limit=1
             )
 
+            # Если нет результатов, создаём фиктивный с максимальным расстоянием
             if not results:
-                results = [{"user_id": user_id, "distance": 2.0}]
+                distance = 2.0
+                person_id = None
+            else:
+                distance = results[0]["distance"]
+                person_id = results[0]["person_id"]
 
-            distance = results[0].get("distance", 2.0)
             percent = self._percentage_fcb(distance)
 
             item = {
@@ -413,7 +450,7 @@ class FRDatabase:
                 "data": {
                     "photobank_type": "local",
                     "person": {
-                        "id": results[0].get("person_id"),
+                        "id": person_id,
                         "percent": round(percent, 2),
                         "is_real": is_real,
                         "is_multiple": is_multiple,
@@ -425,27 +462,28 @@ class FRDatabase:
                 item["data"]["person"].update(
                     {
                         "facerecognized": True,
-                        "id": results[0].get("person_id"),
-                        "description": results[0].get("description", ""),
+                        "id": person_id,
+                        "description": (
+                            results[0].get("description", "") if results else ""
+                        ),
                         "person_unknown": False,
                         "percent_unknown": 0,
                         "person_unknown_new": False,
                     }
                 )
-                datacuttxt = f"{results[0].get('description', '')} ({percent:.2f})"
+                datacuttxt = (
+                    f"{results[0].get('description', '')} ({percent:.2f})"
+                    if results
+                    else f"Unknown ({percent:.2f})"
+                )
             else:
                 unk_result = self.find_or_create_vector(
                     embedding=embedding,
                     max_distance=max_distance,
                     image_data=image_data,
                 )
-
-                distance2 = unk_result.get("distance")
-                if distance2 is None:
-                    distance2 = max_distance
-
+                distance2 = unk_result.get("distance") or max_distance
                 percent2 = self._percentage_fcb(distance2)
-
                 item["data"]["person"].update(
                     {
                         "facerecognized": False,
@@ -456,7 +494,6 @@ class FRDatabase:
                         "person_unknown_new": unk_result.get("action") == "created",
                     }
                 )
-
                 action_text = (
                     "new unknown"
                     if unk_result.get("action") == "created"
@@ -466,9 +503,7 @@ class FRDatabase:
                     f"{action_text} (Поиск по базе {percent:.2f} ({distance:.2f}) < {percent_unknown} -> "
                     f"Поиск по неизв. {percent2:.2f}% ({distance2:.2f} / {max_distance})"
                 )
-
             return item, datacuttxt
-
         except Exception as e:
             import traceback
 

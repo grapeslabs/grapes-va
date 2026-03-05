@@ -97,7 +97,7 @@ def queue_worker(q, stop_event):
             processed_count += 1
             timestamp_num, camera_id, camera_name, user_id, faces, face_widths, _ = data
             timestamp = datetime.fromtimestamp(timestamp_num)
-
+            print(f"user_id = {user_id} (type: {type(user_id)})")
             embeddings = pFace.face_recognition(faces=faces)
 
             for idx, emb in enumerate(embeddings):
@@ -117,6 +117,11 @@ def queue_worker(q, stop_event):
                 # Берем первые 128 элементов для вектора
                 emb_128 = emb[:128] if len(emb) >= 128 else emb
 
+                # После получения эмбеддинга
+                emb_128 = emb[:128] if len(emb) >= 128 else emb
+                print(f"\n🔍 РАСПОЗНАВАНИЕ ЛИЦА:")
+                print(f"  Вектор (первые 5 значений): {emb_128[:5]}")
+                
                 item, debug_text = db.process_face_recognition(
                     embedding=emb_128.tolist(),
                     dtime=dtime_str,
@@ -129,6 +134,12 @@ def queue_worker(q, stop_event):
                     image_data=full_path,
                 )
 
+                print(f"  Результат: {debug_text}")
+                print(f"  Распознано: {item['data']['person'].get('facerecognized')}")
+                print(f"  Person ID: {item['data']['person'].get('id')}")
+                print(f"  Процент: {item['data']['person'].get('percent')}")
+                
+               
                 recognized = item["data"]["person"].get("facerecognized", False)
                 person_id = item["data"]["person"].get("id") if recognized else None
                 is_unknown = not recognized
