@@ -121,7 +121,7 @@ def queue_worker(q, stop_event):
                 emb_128 = emb[:128] if len(emb) >= 128 else emb
                 print(f"\n🔍 РАСПОЗНАВАНИЕ ЛИЦА:")
                 print(f"  Вектор (первые 5 значений): {emb_128[:5]}")
-                
+
                 item, debug_text = db.process_face_recognition(
                     embedding=emb_128.tolist(),
                     dtime=dtime_str,
@@ -138,8 +138,7 @@ def queue_worker(q, stop_event):
                 print(f"  Распознано: {item['data']['person'].get('facerecognized')}")
                 print(f"  Person ID: {item['data']['person'].get('id')}")
                 print(f"  Процент: {item['data']['person'].get('percent')}")
-                
-               
+
                 recognized = item["data"]["person"].get("facerecognized", False)
                 person_id = item["data"]["person"].get("id") if recognized else None
                 is_unknown = not recognized
@@ -200,6 +199,12 @@ class CameraProcessor(threading.Thread):
         if isinstance(self.stream_url, str) and self.stream_url.isdigit():
             self.stream_url = int(self.stream_url)
 
+        # <-- НОВОЕ: параметры для контроля потери сигнала
+        max_consecutive_failures = 10  # сколько плохих кадров подряд считать потерей
+        consecutive_failures = 0  # счётчик текущих плохих кадров
+        max_reconnect_attempts = 5  # максимальное число попыток переподключения
+        reconnect_attempts = 0  # счётчик попыток переподключения
+
         try:
             cap = cv2.VideoCapture(self.stream_url)
             if not cap.isOpened():
@@ -219,8 +224,59 @@ class CameraProcessor(threading.Thread):
         while self.running:
             ret, frame = cap.read()
             if not ret or frame is None:
-                time.sleep(0.1)
+                consecutive_failures += 1
+                logger.debug(
+                    f"Не удалось прочитать кадр с камеры {self.cam_name}, "
+                    f"последовательных ошибок: {consecutive_failures}"
+                )
+
+                # Если ещё не достигнут порог, просто ждём и пробуем следующий кадр
+                if consecutive_failures < max_consecutive_failures:
+                    time.sleep(0.05)
+                    continue
+
+                # Достигнут порог – начинаем процедуру переподключения
+                reconnect_attempts += 1
+                logger.warning(
+                    f"Потеря сигнала с камеры {self.cam_name} в течение {consecutive_failures} кадров, "
+                    f"попытка переподключения {reconnect_attempts}/{max_reconnect_attempts}"
+                )
+
+                if reconnect_attempts >= max_reconnect_attempts:
+                    logger.error(
+                        f"Не удалось восстановить соединение с камерой {self.cam_name} "
+                        f"после {max_reconnect_attempts} попыток, завершение потока"
+                    )
+                    break
+
+                cap.release()
+                time.sleep(2)
+
+                # Пытаемся открыть камеру заново
+                try:
+                    cap = cv2.VideoCapture(self.stream_url)
+                    if cap.isOpened():
+                        logger.info(f"Переподключение к камере {self.cam_name} успешно")
+                        # Сбрасываем все счётчики
+                        reconnect_attempts = 0
+                        consecutive_failures = 0
+                        continue  # переходим к следующей итерации для чтения кадра
+                    else:
+                        logger.error(
+                            f"Не удалось открыть камеру при переподключении {self.cam_name}"
+                        )
+                except Exception as e:
+                    logger.error(
+                        f"Ошибка при переподключении к камере {self.cam_name}: {e}"
+                    )
+
+                # Если не удалось открыть, делаем паузу и повторяем попытку переподключения
+                time.sleep(1)
                 continue
+
+            # Успешное чтение кадра – сбрасываем счётчики ошибок
+            consecutive_failures = 0
+            reconnect_attempts = 0
 
             # Обработка движения
             motion, recording_active, area, area_box = motion_detector.process_frame(
@@ -229,7 +285,6 @@ class CameraProcessor(threading.Thread):
 
             # Если запись не активна (нет движения и не в периоде дожития) – пропускаем кадр
             if not recording_active:
-                # Небольшая задержка, чтобы не грузить процессор
                 time.sleep(0.05)
                 continue
 

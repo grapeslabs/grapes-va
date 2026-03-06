@@ -148,6 +148,7 @@ def add_person():
     user_id = request.form.get("user_id")
     desc = request.form.get("desc", "")
     photo_files = request.files.getlist("photos")
+    person_id = request.form.get("person_id", generate_short_id())
 
     print(f"📋 Параметры запроса:")
     print(f"  - user_id: {user_id}")
@@ -168,9 +169,6 @@ def add_person():
         return make_response(
             False, message="At least one photo is required", status_code=400
         )
-
-    # Создаём персону
-    person_id = generate_short_id()
 
     percone_dttm = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with fr_db._get_cursor() as cursor:
@@ -305,7 +303,31 @@ def delete_person():
             False, message="user_id and person_id required", status_code=400
         )
 
-    percone_deleted, photo_deleted = fr_db.delete_person(person_id)
+    # Сначала удаляем все фото персоны
+    with fr_db._get_cursor() as cursor:
+        # Получаем пути к файлам фото перед удалением
+        cursor.execute(
+            "SELECT filein, photo_id FROM photo WHERE person_id = %s", (person_id,)
+        )
+        photos = cursor.fetchall()
+
+        # Удаляем записи из photo
+        cursor.execute("DELETE FROM photo WHERE person_id = %s", (person_id,))
+        photo_deleted = cursor.rowcount
+
+        # Удаляем запись из percone
+        cursor.execute("DELETE FROM percone WHERE person_id = %s", (person_id,))
+        percone_deleted = cursor.rowcount
+
+        # Удаляем физические файлы
+        for photo in photos:
+            file_path = photo[0]
+            if file_path and os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                    logger.info(f"Удален файл: {file_path}")
+                except Exception as e:
+                    logger.error(f"Ошибка удаления файла {file_path}: {e}")
 
     return make_response(
         True,
