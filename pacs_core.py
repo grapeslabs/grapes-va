@@ -21,6 +21,7 @@ from libs.pinfacekirjasto.PinFace import PinFace
 from libs.detect_motion import MotionDetector
 from libs.color_logger import ColorLogger
 from libs.DbLibrary import FRDatabase
+from libs.camstream import VideoCapture
 
 pFace = PinFace(ffmode="mtcnn", frmode="adaface")
 
@@ -196,20 +197,15 @@ class CameraProcessor(threading.Thread):
             f"Motion params: min_area={self.motion_min_area}, threshold={self.motion_threshold}, record_after={self.motion_record_after_time}"
         )
 
-        if isinstance(self.stream_url, str) and self.stream_url.isdigit():
-            self.stream_url = int(self.stream_url)
-
         # <-- НОВОЕ: параметры для контроля потери сигнала
         max_consecutive_failures = 10  # сколько плохих кадров подряд считать потерей
         consecutive_failures = 0  # счётчик текущих плохих кадров
         max_reconnect_attempts = 5  # максимальное число попыток переподключения
         reconnect_attempts = 0  # счётчик попыток переподключения
-
+        print(self.stream_url)
         try:
-            cap = cv2.VideoCapture(self.stream_url)
-            if not cap.isOpened():
-                logger.error(f"Не удалось открыть камеру {self.cam_name}")
-                return
+            cap = VideoCapture(self.stream_url)
+
         except Exception as e:
             logger.error(f"Ошибка создания VideoCapture: {e}")
             return
@@ -222,8 +218,8 @@ class CameraProcessor(threading.Thread):
         )
 
         while self.running:
-            ret, frame = cap.read()
-            if not ret or frame is None:
+            frame = cap.read()
+            if frame is None:
                 consecutive_failures += 1
                 logger.debug(
                     f"Не удалось прочитать кадр с камеры {self.cam_name}, "
@@ -254,8 +250,8 @@ class CameraProcessor(threading.Thread):
 
                 # Пытаемся открыть камеру заново
                 try:
-                    cap = cv2.VideoCapture(self.stream_url)
-                    if cap.isOpened():
+                    cap = VideoCapture(self.stream_url)
+                    if cap:
                         logger.info(f"Переподключение к камере {self.cam_name} успешно")
                         # Сбрасываем все счётчики
                         reconnect_attempts = 0
