@@ -12,6 +12,7 @@ __pycache__/
 input/
 thumbnails/
 person_photos/
+events/
 
 # Временные файлы
 *.tmp
