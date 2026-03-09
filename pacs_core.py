@@ -115,13 +115,9 @@ def queue_worker(q, stop_event):
                     "%Y%m%d-%H%M%S-%f"
                 )
 
-                # Берем первые 128 элементов для вектора
                 emb_128 = emb[:128] if len(emb) >= 128 else emb
 
-                # После получения эмбеддинга
                 emb_128 = emb[:128] if len(emb) >= 128 else emb
-                print(f"\n🔍 РАСПОЗНАВАНИЕ ЛИЦА:")
-                print(f"  Вектор (первые 5 значений): {emb_128[:5]}")
 
                 item, debug_text = db.process_face_recognition(
                     embedding=emb_128.tolist(),
@@ -180,6 +176,10 @@ class CameraProcessor(threading.Thread):
         self.camera_id = cam_config["cam_id"]
         self.cam_name = cam_config["name"]
         self.stream_url = cam_config["stream_to_parse"]
+        
+        if len(self.stream_url) <= 3:
+            self.stream_url = int(self.stream_url)
+        
         self.user_id = cam_config.get("user_id", "")
         self.face_width_max = cam_config.get("face_width_max", MIN_WIDTH_PHOTO)
         self.timedelay = cam_config.get("timedelay", 333) / 1000.0
@@ -190,6 +190,11 @@ class CameraProcessor(threading.Thread):
         self.motion_min_area = cam_config.get("motion_min_area", 500)
         self.motion_threshold = cam_config.get("motion_threshold", 25)
         self.motion_record_after_time = cam_config.get("motion_record_after_time", 3)
+
+        self.events_dir_path = f"events/{self.cam_name}"
+
+        if not os.path.exists(self.events_dir_path):
+            os.mkdir(self.events_dir_path)
 
     def run(self):
         logger.info(f"Запуск потока камеры: {self.cam_name} ({self.camera_id})")
@@ -202,9 +207,10 @@ class CameraProcessor(threading.Thread):
         consecutive_failures = 0  # счётчик текущих плохих кадров
         max_reconnect_attempts = 5  # максимальное число попыток переподключения
         reconnect_attempts = 0  # счётчик попыток переподключения
-        print(self.stream_url)
+        logger.info(f"Попытка создания VideoCapture для камеры {self.cam_name}")
         try:
-            cap = VideoCapture(self.stream_url)
+            cap = cv2.VideoCapture(self.stream_url, cv2.CAP_DSHOW)
+            logger.info(f"Обьект VideoCapture для камеры {self.cam_name} успешно создан")
 
         except Exception as e:
             logger.error(f"Ошибка создания VideoCapture: {e}")
@@ -216,15 +222,11 @@ class CameraProcessor(threading.Thread):
             threshold=self.motion_threshold,
             record_after_time=self.motion_record_after_time,
         )
-
+        logger.info(f"Запуск потока обработки кадров для камеры {self.cam_name}")
         while self.running:
-            frame = cap.read()
+            ret, frame = cap.read()
             if frame is None:
                 consecutive_failures += 1
-                logger.debug(
-                    f"Не удалось прочитать кадр с камеры {self.cam_name}, "
-                    f"последовательных ошибок: {consecutive_failures}"
-                )
 
                 # Если ещё не достигнут порог, просто ждём и пробуем следующий кадр
                 if consecutive_failures < max_consecutive_failures:
@@ -256,7 +258,7 @@ class CameraProcessor(threading.Thread):
                         # Сбрасываем все счётчики
                         reconnect_attempts = 0
                         consecutive_failures = 0
-                        continue  # переходим к следующей итерации для чтения кадра
+                        continue
                     else:
                         logger.error(
                             f"Не удалось открыть камеру при переподключении {self.cam_name}"
@@ -293,6 +295,7 @@ class CameraProcessor(threading.Thread):
             bboxes, faces, _ = pFace.face_detection(pil_img)
 
             if faces:
+                event_timestamp = datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
                 filtered_faces = []
                 face_widths = []
                 for b, f in zip(bboxes, faces):
@@ -314,6 +317,10 @@ class CameraProcessor(threading.Thread):
                             self.config.get("stream_id", ""),
                         )
                     )
+                    cv2.imwrite(
+                    f"{self.events_dir_path}/{self.camera_id}_{event_timestamp}.jpg",
+                    frame,
+                )
 
             elapsed = time.time() - start_time
             remaining = self.timedelay - elapsed
@@ -376,6 +383,9 @@ def main():
     logger.info("=" * 50)
     logger.info("Инициализация системы PACS Core...")
     logger.info("=" * 50)
+
+    if not os.path.exists("events"):
+        os.mkdir("events")
 
     global shared_queue
     shared_queue = queue.Queue(maxsize=1000)

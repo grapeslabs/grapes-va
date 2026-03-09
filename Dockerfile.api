@@ -1,4 +1,4 @@
-FROM python:3.12.1-slim
+FROM python:3.12-slim
 
 WORKDIR /app
 
@@ -12,6 +12,8 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 RUN pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+
 COPY api_manager.py .
 COPY libs/ ./libs/
 COPY pretrained/ ./pretrained/

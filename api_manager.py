@@ -13,6 +13,8 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from PIL import Image
 import io
+import numpy as np
+import cv2
 
 from libs.pinfacekirjasto.PinFace import PinFace
 from libs.DbLibrary import FRDatabase
@@ -144,103 +146,122 @@ def suspend_camera():
 
 @app.route("/api/v1/person/add", methods=["POST"])
 def add_person():
-
     user_id = request.form.get("user_id")
     desc = request.form.get("desc", "")
     photo_files = request.files.getlist("photos")
     person_id = request.form.get("person_id", generate_short_id())
 
-    print(f"📋 Параметры запроса:")
+    print(f"Параметры запроса:")
     print(f"  - user_id: {user_id}")
     print(f"  - desc: {desc}")
+    print(f"  - person_id: {person_id}")
     print(f"  - количество файлов: {len(photo_files)}")
 
-    for i, f in enumerate(photo_files):
-        print(
-            f"  - файл {i+1}: {f.filename}, тип: {f.content_type}, размер: {len(f.read())} байт"
-        )
-        f.seek(0)
-
     if not user_id:
-        print("❌ Ошибка: user_id is required")
+        print("Ошибка: user_id is required")
         return make_response(False, message="user_id is required", status_code=400)
-    if not photo_files:
-        print("❌ Ошибка: At least one photo is required")
-        return make_response(
-            False, message="At least one photo is required", status_code=400
-        )
 
     percone_dttm = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    is_update = False
+    old_photo_paths = []
+
     with fr_db._get_cursor() as cursor:
         cursor.execute(
-            """
-            INSERT INTO percone (user_id, person_id, description, tag, percone_dttm, view_percone)
-            VALUES (%s, %s, %s, %s, %s, %s)
-            """,
-            (user_id, person_id, desc, desc, percone_dttm, True),
+            "SELECT person_id FROM percone WHERE person_id = %s", (person_id,)
         )
+        existing = cursor.fetchone()
 
-    photo_ids = []
-    qualities = []
-    files_saved = 0
-
-    for idx, photo_file in enumerate(photo_files):
-
-        # Читаем байты
-        img_bytes = photo_file.read()
-
-        try:
-            img = Image.open(io.BytesIO(img_bytes))
-            img = img.convert("RGB")
-        except Exception as e:
-            continue
-
-        # Изменяем размер
-        img_resized = img.resize((112, 112), Image.Resampling.LANCZOS)
-
-        faces = [img_resized]
-        embeddings = pFace.face_recognition(faces=faces)
-
-        if not embeddings:
-            continue
-
-        photo_id = generate_short_id()
-        filename = f"{person_id}_{photo_id}.jpg"
-        file_path = os.path.join(PERSON_PHOTOS_PATH, filename)
-        os.makedirs(PERSON_PHOTOS_PATH, exist_ok=True)
-
-        with open(file_path, "wb") as f:
-            f.write(img_bytes)
-        files_saved += 1
-
-        # Обрабатываем вектор
-        vector_full = embeddings[0].tolist()
-        vector_128 = vector_full[:128] if len(vector_full) >= 128 else vector_full
-        print(f"Размерность эмбеддинга: {len(embeddings[0])}")
-        print(f"Первые 5 значений: {embeddings[0][:5]}")
-        with fr_db._get_cursor() as cursor:
+        if existing:
+            is_update = True
             cursor.execute(
                 """
-                INSERT INTO photo (filein, person_id, photo_id, quality, photo_dttm, vector, vector128, view_photo)
-                VALUES (%s, %s, %s, %s, %s, %s::vector, %s::vector, %s)
-                """,
-                (
-                    file_path,
-                    person_id,
-                    photo_id,
-                    95,
-                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    vector_full,
-                    vector_128,
-                    True,
-                ),
+                UPDATE percone
+                SET description = %s, tag = %s, percone_dttm = %s, view_percone = %s
+                WHERE person_id = %s
+            """,
+                (desc, desc, percone_dttm, True, person_id),
             )
 
-        photo_ids.append(photo_id)
-        qualities.append(95)
+            if photo_files:
+                cursor.execute(
+                    "SELECT filein FROM photo WHERE person_id = %s", (person_id,)
+                )
+                old_photo_paths = [row[0] for row in cursor.fetchall()]
+                cursor.execute("DELETE FROM photo WHERE person_id = %s", (person_id,))
+        else:
+            cursor.execute(
+                """
+                INSERT INTO percone (user_id, person_id, description, tag, percone_dttm, view_percone)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """,
+                (user_id, person_id, desc, desc, percone_dttm, True),
+            )
 
-    if not photo_ids:
-        fr_db.delete_person(person_id)
+        photo_ids = []
+        qualities = []
+        files_saved = 0
+
+        if photo_files:
+            for photo_file in photo_files:
+                img_bytes = photo_file.read()
+                try:
+                    img = Image.open(io.BytesIO(img_bytes))
+                    img = img.convert("RGB")
+                except Exception:
+                    continue
+
+                img_resized = img.resize((112, 112), Image.Resampling.LANCZOS)
+                faces = [img_resized]
+                embeddings = pFace.face_recognition(faces=faces)
+
+                if not embeddings:
+                    continue
+
+                photo_id = generate_short_id()
+                filename = f"{person_id}_{photo_id}.jpg"
+                file_path = os.path.join(PERSON_PHOTOS_PATH, filename)
+                os.makedirs(PERSON_PHOTOS_PATH, exist_ok=True)
+
+                with open(file_path, "wb") as f:
+                    f.write(img_bytes)
+                files_saved += 1
+
+                vector_full = embeddings[0].tolist()
+                vector_128 = (
+                    vector_full[:128] if len(vector_full) >= 128 else vector_full
+                )
+
+                cursor.execute(
+                    """
+                    INSERT INTO photo (filein, person_id, photo_id, quality, photo_dttm, vector, vector128, view_photo)
+                    VALUES (%s, %s, %s, %s, %s, %s::vector, %s::vector, %s)
+                """,
+                    (
+                        file_path,
+                        person_id,
+                        photo_id,
+                        95,
+                        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        vector_full,
+                        vector_128,
+                        True,
+                    ),
+                )
+
+                photo_ids.append(photo_id)
+                qualities.append(95)
+
+        if not is_update and not photo_ids:
+            raise Exception("No valid faces in photos")
+
+    for path in old_photo_paths:
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except Exception as e:
+            print(f"Ошибка удаления файла {path}: {e}")
+
+    if not is_update and not photo_ids:
         return make_response(False, message="No valid faces in photos", status_code=400)
 
     response = {
@@ -248,7 +269,10 @@ def add_person():
         "photo_id": photo_ids,
         "quality": qualities,
         "user_id": user_id,
-        "info_msg": "Person added successfully",
+        "info_msg": (
+            "Person updated successfully" if is_update else "Person added successfully"
+        ),
+        "is_update": is_update,
     }
 
     return make_response(True, response, status_code=201)

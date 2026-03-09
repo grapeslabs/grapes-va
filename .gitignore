@@ -11,6 +11,7 @@ __pycache__/
 # Директории с данными (создаются при работе)
 input/
 thumbnails/
+person_photos/
 
 # Временные файлы
 *.tmp
