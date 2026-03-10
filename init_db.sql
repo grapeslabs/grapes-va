@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS public.photo (
     photo_id VARCHAR(255),
     quality INTEGER,
     photo_dttm VARCHAR(255),
-    vector vector,
+    vector public.vector,
     vector128 vector(128),
     photo TEXT,
     view_photo BOOLEAN DEFAULT true NOT NULL,
@@ -72,7 +72,7 @@ CREATE TABLE IF NOT EXISTS public.unknown (
     id SERIAL,
     uuid TEXT,
     data TEXT,
-    embedding vector(128),
+    embedding vector(512),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
     last_response_at TIMESTAMP WITH TIME ZONE,
     response_count INTEGER DEFAULT 0,
@@ -107,7 +107,7 @@ ALTER TABLE public.analytics_events OWNER TO postgres;
 -- ========== Функция поиска/создания неизвестного лица ==========
 CREATE OR REPLACE FUNCTION public.find_or_create_by_vector(
     new_uuid text,
-    search_vector vector(128),
+    search_vector public.vector,
     max_distance double precision,
     new_data text,
     OUT result_uuid text,
@@ -184,12 +184,12 @@ BEGIN
 END;
 $body$;
 
-ALTER FUNCTION public.find_or_create_by_vector(text, vector(128), double precision, text, OUT text, OUT text, OUT double precision) OWNER TO postgres;
+ALTER FUNCTION public.find_or_create_by_vector(text, vector, double precision, text, OUT text, OUT text, OUT double precision) OWNER TO postgres;
 
 -- ========== Функция поиска похожих лиц среди известных персон ==========
 CREATE OR REPLACE FUNCTION public.find_similar_faces(
     p_user_id varchar,
-    p_embedding vector(128),
+    p_embedding public.vector,
     p_limit integer DEFAULT 3
 )
 RETURNS TABLE (
@@ -215,7 +215,7 @@ BEGIN
         ph.photo_id::VARCHAR,
         pe.description::TEXT,
         pe.tag::VARCHAR,
-        (ph.vector128 <-> p_embedding)::FLOAT AS distance
+        (ph.vector <-> p_embedding)::FLOAT AS distance
     FROM
         public.photo ph
     JOIN
@@ -224,7 +224,7 @@ BEGIN
         pe.user_id = p_user_id
         AND pe.view_percone
         AND ph.view_photo
-        AND ph.vector128 IS NOT NULL
+        AND ph.vector IS NOT NULL
     ORDER BY
         distance
     LIMIT
@@ -232,4 +232,4 @@ BEGIN
 END;
 $body$;
 
-ALTER FUNCTION public.find_similar_faces(varchar, vector(128), integer) OWNER TO postgres;
+ALTER FUNCTION public.find_similar_faces(varchar, public.vector, integer) OWNER TO postgres;

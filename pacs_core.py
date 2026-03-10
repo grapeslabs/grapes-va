@@ -101,20 +101,7 @@ def queue_worker(q, stop_event):
             for idx, emb in enumerate(embeddings):
                 face_img = faces[idx]
                 face_width = face_widths[idx]
-                emb_128 = emb[:128] if len(emb) >= 128 else emb
 
-                # Быстрая проверка - есть ли персона в базе
-                person_id = db.find_similar_person(emb_128.tolist())
-
-                # Проверяем таймаут для известной персоны
-                if person_id:
-                    key = (camera_id, person_id)
-                    last_seen = person_last_seen.get(key, 0)
-                    if current_time - last_seen < PERSON_TIMEOUT:
-                        logger.debug(f"Таймаут для персоны {person_id}, пропуск")
-                        continue
-
-                # Только теперь выполняем полную обработку
                 event_uuid = str(uuid.uuid4())
                 filename = f"{event_uuid}.jpeg"
                 full_path = os.path.join(THUMBNAIL_PATH, filename)
@@ -127,7 +114,7 @@ def queue_worker(q, stop_event):
                 )
 
                 item, debug_text = db.process_face_recognition(
-                    embedding=emb_128.tolist(),
+                    embedding=emb,
                     dtime=dtime_str,
                     camera_id=camera_id,
                     user_id=user_id,
@@ -143,10 +130,14 @@ def queue_worker(q, stop_event):
                     person_id = item["data"]["person"].get("id")
                     is_unknown = False
                     unknown_uuid = None
-
-                    # Обновляем время для распознанной персоны
-                    if person_id:
-                        person_last_seen[(camera_id, person_id)] = current_time
+                    
+                    key = (camera_id, person_id)
+                    
+                    last_seen = person_last_seen.get(key, 0)
+                    if current_time - last_seen < PERSON_TIMEOUT:
+                        logger.debug(f"Таймаут для персоны {person_id}, пропуск")
+                        continue
+                    person_last_seen[key] = current_time
 
                 else:
                     person_id = None
@@ -162,7 +153,6 @@ def queue_worker(q, stop_event):
                                 f"Таймаут для неизвестной {unknown_uuid}, пропуск"
                             )
                             continue
-                        # Обновляем время для неизвестной персоны
                         unknown_last_seen[key] = current_time
 
                 # Логирование и запись в БД
@@ -182,7 +172,6 @@ def queue_worker(q, stop_event):
                     "unknown_uuid": unknown_uuid,
                     "face_width": face_width,
                     "snapshot_path": full_path,
-                    "vector128": emb_128.tolist(),
                     "user_id": user_id,
                 }
 
@@ -326,9 +315,7 @@ class CameraProcessor(threading.Thread):
             self.frames_processed += 1
             start_time = time.time()
 
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            pil_img = Image.fromarray(frame_rgb)
-            bboxes, faces, _ = pFace.face_detection(pil_img)
+            bboxes, faces, _ = pFace.face_detection(frame)
 
             if faces:
                 event_timestamp = datetime.now().strftime("%d-%m-%Y_%H-%M-%S")

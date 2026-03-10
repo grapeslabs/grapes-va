@@ -205,16 +205,32 @@ def add_person():
             for photo_file in photo_files:
                 img_bytes = photo_file.read()
                 try:
-                    img = Image.open(io.BytesIO(img_bytes))
-                    img = img.convert("RGB")
-                except Exception:
+                    img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+                except Exception as e:
+                    print(f"Ошибка открытия изображения: {e}")
                     continue
 
-                img_resized = img.resize((112, 112), Image.Resampling.LANCZOS)
-                faces = [img_resized]
-                embeddings = pFace.face_recognition(faces=faces)
+                # Поиск лиц на изображении
+                bboxes, faces, _ = pFace.face_detection(img)
+
+                if not faces:
+                    print(f"Лица не найдены на изображении {photo_file.filename}")
+                    continue
+
+                if len(faces) > 1:
+                    print(
+                        f"Найдено более одного лица ({len(faces)}) на изображении {photo_file.filename}, пропуск"
+                    )
+                    continue
+
+                # Изображение подходит - строим вектор для найденного лица
+                face = faces[0]
+                embeddings = pFace.face_recognition(faces=[face])
 
                 if not embeddings:
+                    print(
+                        f"Не удалось построить вектор для лица на {photo_file.filename}"
+                    )
                     continue
 
                 photo_id = generate_short_id()
@@ -222,19 +238,17 @@ def add_person():
                 file_path = os.path.join(PERSON_PHOTOS_PATH, filename)
                 os.makedirs(PERSON_PHOTOS_PATH, exist_ok=True)
 
-                with open(file_path, "wb") as f:
-                    f.write(img_bytes)
+                # Сохраняем только вырезанное лицо
+                face_cv = cv2.cvtColor(np.array(face), cv2.COLOR_RGB2BGR)
+                cv2.imwrite(file_path, face_cv)
                 files_saved += 1
 
                 vector_full = embeddings[0].tolist()
-                vector_128 = (
-                    vector_full[:128] if len(vector_full) >= 128 else vector_full
-                )
 
                 cursor.execute(
                     """
-                    INSERT INTO photo (filein, person_id, photo_id, quality, photo_dttm, vector, vector128, view_photo)
-                    VALUES (%s, %s, %s, %s, %s, %s::vector, %s::vector, %s)
+                    INSERT INTO photo (filein, person_id, photo_id, quality, photo_dttm, vector, view_photo)
+                    VALUES (%s, %s, %s, %s, %s, %s::vector, %s)
                 """,
                     (
                         file_path,
@@ -243,7 +257,6 @@ def add_person():
                         95,
                         datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         vector_full,
-                        vector_128,
                         True,
                     ),
                 )
@@ -252,7 +265,9 @@ def add_person():
                 qualities.append(95)
 
         if not is_update and not photo_ids:
-            raise Exception("No valid faces in photos")
+            return make_response(
+                False, message="No valid faces in photos", status_code=400
+            )
 
     for path in old_photo_paths:
         try:
@@ -260,9 +275,6 @@ def add_person():
                 os.remove(path)
         except Exception as e:
             print(f"Ошибка удаления файла {path}: {e}")
-
-    if not is_update and not photo_ids:
-        return make_response(False, message="No valid faces in photos", status_code=400)
 
     response = {
         "person_id": person_id,

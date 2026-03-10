@@ -176,13 +176,13 @@ class FRDatabase:
         with self._get_cursor(cursor_factory=RealDictCursor) as cursor:
             cursor.execute(
                 """
-                SELECT person_id, vector128
+                SELECT person_id, vector
                 FROM photo
-                WHERE vector128 IS NOT NULL
+                WHERE vector IS NOT NULL
             """
             )
             rows = cursor.fetchall()
-            return [(row["person_id"], list(row["vector128"])) for row in rows]
+            return [(row["person_id"], list(row["vector"])) for row in rows]
 
     def find_similar_person(
         self, embedding: List[float], threshold: float = EUCLIDEAN_THRESHOLD
@@ -191,10 +191,10 @@ class FRDatabase:
         with self._get_cursor(cursor_factory=RealDictCursor) as cursor:
             cursor.execute(
                 """
-                SELECT person_id, vector128 <-> %s::vector AS dist
+                SELECT person_id, vector <-> %s::vector AS dist
                 FROM photo
-                WHERE vector128 IS NOT NULL
-                ORDER BY vector128 <-> %s::vector
+                WHERE vector IS NOT NULL
+                ORDER BY vector <-> %s::vector
                 LIMIT 1
             """,
                 (emb_str, emb_str),
@@ -244,7 +244,7 @@ class FRDatabase:
                 cursor.execute(
                     """
                     INSERT INTO photo
-                        (filein, person_id, photo_id, quality, photo_dttm, vector128, checksum, view_photo)
+                        (filein, person_id, photo_id, quality, photo_dttm, vector, checksum, view_photo)
                     VALUES (%s, %s, %s, %s, %s, %s::vector, %s, %s)
                 """,
                     (
@@ -253,7 +253,7 @@ class FRDatabase:
                         photo_id,
                         ph.get("quality"),
                         datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        ph["vector128"],
+                        ph["vector"],
                         ph.get("checksum"),
                         True,
                     ),
@@ -340,7 +340,7 @@ class FRDatabase:
         params = (
             camera_data["cam_id"],
             camera_data["name"],
-            camera_data.get("description", camera_data["name"]),  # маппинг desc -> description
+            camera_data.get("description", camera_data["name"]),
             camera_data["stream_to_parse"],
             camera_data["user_id"],
             camera_data.get("face_width_max", 50),
@@ -442,36 +442,9 @@ class FRDatabase:
     ) -> List[Dict]:
         emb_str = self._embedding_to_str(embedding)
         with self._get_cursor(cursor_factory=RealDictCursor) as cursor:
-            # Проверим, есть ли вообще фото у пользователя
             cursor.execute(
-                "SELECT COUNT(*) FROM photo JOIN percone USING(person_id) WHERE user_id = %s AND vector128 IS NOT NULL",
-                (user_id,),
-            )
-            count = cursor.fetchone()["count"]
-            if count == 0:
-                # Нет фото для поиска
-                return []
-
-            # Выполняем поиск
-            cursor.execute(
-                """
-                SELECT 
-                    pe.user_id::VARCHAR,
-                    pe.person_id::VARCHAR,
-                    ph.photo_id::VARCHAR,
-                    pe.description::TEXT,
-                    pe.tag::VARCHAR,
-                    (ph.vector128 <-> %s::vector)::FLOAT AS distance
-                FROM photo ph
-                JOIN percone pe ON ph.person_id = pe.person_id
-                WHERE pe.user_id = %s
-                    AND pe.view_percone
-                    AND ph.view_photo
-                    AND ph.vector128 IS NOT NULL
-                ORDER BY distance
-                LIMIT %s
-                """,
-                (emb_str, user_id, limit),
+                "SELECT * FROM find_similar_faces(%s, %s::vector, %s)",
+                (user_id, emb_str, limit),
             )
             rows = cursor.fetchall()
             return [
