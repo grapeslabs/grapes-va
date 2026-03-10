@@ -39,8 +39,6 @@ fr_db = FRDatabase()
 app = Flask(__name__)
 CORS(app)
 
-camera_storage = {}
-
 
 def make_response(
     ok: bool, data: dict = None, message: str = "", status_code: int = 200
@@ -73,12 +71,12 @@ def create_camera():
         )
 
     cam_id = data.get("cam_id", generate_short_id())
-    name = data.get("name", data.get("desc", cam_id))
+    name = data.get("name", data.get("description", cam_id))
 
     camera_data = {
         "cam_id": cam_id,
         "name": name,
-        "desc": data.get("desc", name),
+        "desc": data.get("description", name),
         "stream_to_parse": stream_to_parse,
         "user_id": user_id,
         "face_width_max": data.get("face_width_max", MIN_WIDTH_PHOTO),
@@ -87,7 +85,6 @@ def create_camera():
         "crop_params": data.get("crop_params"),
         "extraqueue": data.get("extraqueue", 1),
         "status": "active",
-        # Параметры детектора движения
         "motion_min_area": data.get("motion_min_area", MOTION_MIN_AREA),
         "motion_threshold": data.get("motion_threshold", MOTION_THRESHOLD),
         "motion_record_after_time": data.get(
@@ -95,8 +92,9 @@ def create_camera():
         ),
     }
 
-    camera_storage[cam_id] = camera_data
-    logger.info(f"Camera {cam_id} created/updated")
+    # Сохраняем в БД
+    fr_db.add_camera(camera_data)
+    logger.info(f"Camera {cam_id} created/updated in DB")
     logger.info(f"Camera data: {camera_data}")
 
     return make_response(
@@ -108,16 +106,18 @@ def create_camera():
 
 @app.route("/api/c1/list", methods=["GET"])
 def list_cameras():
-    cam_id_filter = request.args.get("cam_id")
     user_id_filter = request.args.get("user_id")
 
+    # Получаем камеры из БД
+    cameras = fr_db.get_all_cameras(user_id_filter)
+
     tasks = {"queue": {}, "suspended": {}}
-    for cid, cam in camera_storage.items():
-        if cam_id_filter and cid != cam_id_filter:
-            continue
-        if user_id_filter and str(cam["user_id"]) != user_id_filter:
-            continue
-        tasks["queue"][cid] = {"filename": f"{cid}.json", "folder": "queue", **cam}
+    for cam in cameras:
+        tasks["queue"][cam["cam_id"]] = {
+            "filename": f"{cam['cam_id']}.json",
+            "folder": "queue",
+            **cam,
+        }
 
     return make_response(True, {"tasks": tasks})
 
@@ -132,16 +132,16 @@ def suspend_camera():
     if not cam_id:
         return make_response(False, message="cam_id required", status_code=400)
 
-    if cam_id not in camera_storage:
+    # Помечаем камеру как suspended в БД
+    if fr_db.suspend_camera(cam_id):
+        logger.info(f"Camera {cam_id} suspended")
+        return make_response(
+            True, {"status": "success", "filename": f"{cam_id}.json", "cam_id": cam_id}
+        )
+    else:
         return make_response(
             False, message=f"Задание с cam_id '{cam_id}' не найдено", status_code=404
         )
-
-    del camera_storage[cam_id]
-    logger.info(f"Camera {cam_id} suspended")
-    return make_response(
-        True, {"status": "success", "filename": f"{cam_id}.json", "cam_id": cam_id}
-    )
 
 
 @app.route("/api/v1/person/add", methods=["POST"])

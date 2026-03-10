@@ -50,44 +50,40 @@ cameras_lock = threading.Lock()
 shared_queue = None
 
 
-def fetch_cameras_from_api():
+def fetch_cameras_from_db():
+    """Читает камеры напрямую из БД"""
     try:
-        resp = requests.get(f"{PACS_API_URL}/api/c1/list", timeout=5)
-        if resp.status_code == 200:
-            data = resp.json()
-            tasks = data.get("tasks", {}).get("queue", {})
-            cameras_list = []
-            for cam_id, cam_info in tasks.items():
-                cameras_list.append(
-                    {
-                        "cam_id": cam_id,
-                        "name": cam_info.get("name", cam_info.get("desc", cam_id)),
-                        "stream_to_parse": cam_info.get("stream_to_parse"),
-                        "user_id": cam_info.get("user_id"),
-                        "face_width_max": cam_info.get(
-                            "face_width_max", MIN_WIDTH_PHOTO
-                        ),
-                        "timedelay": cam_info.get("timedelay", 333),
-                        # Параметры детектора движения
-                        "motion_min_area": cam_info.get("motion_min_area", 500),
-                        "motion_threshold": cam_info.get("motion_threshold", 25),
-                        "motion_record_after_time": cam_info.get(
-                            "motion_record_after_time", 3
-                        ),
-                    }
-                )
-            logger.info(f"Получено {len(cameras_list)} камер из API")
-            return cameras_list
-        else:
-            logger.error(f"API вернул код {resp.status_code}")
+        cameras_list = []
+        rows = db.get_all_cameras()  # используем новый метод
+
+        for cam in rows:
+            cameras_list.append(
+                {
+                    "cam_id": cam["cam_id"],
+                    "name": cam["name"],
+                    "stream_to_parse": cam["stream_to_parse"],
+                    "user_id": cam["user_id"],
+                    "face_width_max": cam.get("face_width_max", MIN_WIDTH_PHOTO),
+                    "timedelay": cam.get("timedelay", 333),
+                    "motion_min_area": cam.get("motion_min_area", 500),
+                    "motion_threshold": cam.get("motion_threshold", 25),
+                    "motion_record_after_time": cam.get("motion_record_after_time", 3),
+                }
+            )
+        logger.info(f"Получено {len(cameras_list)} камер из БД")
+        return cameras_list
     except Exception as e:
-        logger.error(f"Ошибка при запросе камер: {e}")
-    return []
+        logger.error(f"Ошибка при запросе камер из БД: {e}")
+        return []
 
 
 def queue_worker(q, stop_event):
     logger.info("Запуск потока обработчика очереди")
     processed_count = 0
+    person_last_seen = {}  # для известных персон (camera_id, person_id)
+    unknown_last_seen = {}  # для неизвестных персон (camera_id, unknown_uuid)
+    PERSON_TIMEOUT = 3  # секунд
+
     while not stop_event.is_set():
         try:
             data = q.get(timeout=0.3)
@@ -98,12 +94,27 @@ def queue_worker(q, stop_event):
             processed_count += 1
             timestamp_num, camera_id, camera_name, user_id, faces, face_widths, _ = data
             timestamp = datetime.fromtimestamp(timestamp_num)
-            print(f"user_id = {user_id} (type: {type(user_id)})")
+            current_time = time.time()
+
             embeddings = pFace.face_recognition(faces=faces)
 
             for idx, emb in enumerate(embeddings):
                 face_img = faces[idx]
                 face_width = face_widths[idx]
+                emb_128 = emb[:128] if len(emb) >= 128 else emb
+
+                # Быстрая проверка - есть ли персона в базе
+                person_id = db.find_similar_person(emb_128.tolist())
+
+                # Проверяем таймаут для известной персоны
+                if person_id:
+                    key = (camera_id, person_id)
+                    last_seen = person_last_seen.get(key, 0)
+                    if current_time - last_seen < PERSON_TIMEOUT:
+                        logger.debug(f"Таймаут для персоны {person_id}, пропуск")
+                        continue
+
+                # Только теперь выполняем полную обработку
                 event_uuid = str(uuid.uuid4())
                 filename = f"{event_uuid}.jpeg"
                 full_path = os.path.join(THUMBNAIL_PATH, filename)
@@ -114,10 +125,6 @@ def queue_worker(q, stop_event):
                 dtime_str = datetime.fromtimestamp(timestamp_num).strftime(
                     "%Y%m%d-%H%M%S-%f"
                 )
-
-                emb_128 = emb[:128] if len(emb) >= 128 else emb
-
-                emb_128 = emb[:128] if len(emb) >= 128 else emb
 
                 item, debug_text = db.process_face_recognition(
                     embedding=emb_128.tolist(),
@@ -131,14 +138,39 @@ def queue_worker(q, stop_event):
                     image_data=full_path,
                 )
 
-                print(f"  Результат: {debug_text}")
-                print(f"  Распознано: {item['data']['person'].get('facerecognized')}")
-                print(f"  Person ID: {item['data']['person'].get('id')}")
-                print(f"  Процент: {item['data']['person'].get('percent')}")
-
                 recognized = item["data"]["person"].get("facerecognized", False)
-                person_id = item["data"]["person"].get("id") if recognized else None
-                is_unknown = not recognized
+                if recognized:
+                    person_id = item["data"]["person"].get("id")
+                    is_unknown = False
+                    unknown_uuid = None
+
+                    # Обновляем время для распознанной персоны
+                    if person_id:
+                        person_last_seen[(camera_id, person_id)] = current_time
+
+                else:
+                    person_id = None
+                    is_unknown = True
+                    unknown_uuid = item["data"]["person"].get("unknown_uuid")
+
+                    # Проверяем таймаут для неизвестной персоны
+                    if unknown_uuid:
+                        key = (camera_id, unknown_uuid)
+                        last_seen = unknown_last_seen.get(key, 0)
+                        if current_time - last_seen < PERSON_TIMEOUT:
+                            logger.debug(
+                                f"Таймаут для неизвестной {unknown_uuid}, пропуск"
+                            )
+                            continue
+                        # Обновляем время для неизвестной персоны
+                        unknown_last_seen[key] = current_time
+
+                # Логирование и запись в БД
+                print(f"  Результат: {debug_text}")
+                print(f"  Распознано: {recognized}")
+                print(f"  Person ID: {person_id}")
+                print(f"  Unknown UUID: {unknown_uuid}")
+                print(f"  Процент: {item['data']['person'].get('percent')}")
 
                 event_data = {
                     "event_id": event_uuid,
@@ -147,9 +179,11 @@ def queue_worker(q, stop_event):
                     "camera_name": camera_name,
                     "person_id": person_id,
                     "is_unknown": is_unknown,
+                    "unknown_uuid": unknown_uuid,
                     "face_width": face_width,
                     "snapshot_path": full_path,
                     "vector128": emb_128.tolist(),
+                    "user_id": user_id,
                 }
 
                 if not DEBUG_MODE:
@@ -176,10 +210,10 @@ class CameraProcessor(threading.Thread):
         self.camera_id = cam_config["cam_id"]
         self.cam_name = cam_config["name"]
         self.stream_url = cam_config["stream_to_parse"]
-        
+
         if len(self.stream_url) <= 3:
             self.stream_url = int(self.stream_url)
-        
+
         self.user_id = cam_config.get("user_id", "")
         self.face_width_max = cam_config.get("face_width_max", MIN_WIDTH_PHOTO)
         self.timedelay = cam_config.get("timedelay", 333) / 1000.0
@@ -209,8 +243,10 @@ class CameraProcessor(threading.Thread):
         reconnect_attempts = 0  # счётчик попыток переподключения
         logger.info(f"Попытка создания VideoCapture для камеры {self.cam_name}")
         try:
-            cap = cv2.VideoCapture(self.stream_url, cv2.CAP_DSHOW)
-            logger.info(f"Обьект VideoCapture для камеры {self.cam_name} успешно создан")
+            cap = VideoCapture(self.stream_url)
+            logger.info(
+                f"Обьект VideoCapture для камеры {self.cam_name} успешно создан"
+            )
 
         except Exception as e:
             logger.error(f"Ошибка создания VideoCapture: {e}")
@@ -224,7 +260,7 @@ class CameraProcessor(threading.Thread):
         )
         logger.info(f"Запуск потока обработки кадров для камеры {self.cam_name}")
         while self.running:
-            ret, frame = cap.read()
+            frame = cap.read()
             if frame is None:
                 consecutive_failures += 1
 
@@ -247,7 +283,7 @@ class CameraProcessor(threading.Thread):
                     )
                     break
 
-                cap.release()
+                cap.stop()
                 time.sleep(2)
 
                 # Пытаемся открыть камеру заново
@@ -318,16 +354,16 @@ class CameraProcessor(threading.Thread):
                         )
                     )
                     cv2.imwrite(
-                    f"{self.events_dir_path}/{self.camera_id}_{event_timestamp}.jpg",
-                    frame,
-                )
+                        f"{self.events_dir_path}/{self.camera_id}_{event_timestamp}.jpg",
+                        frame,
+                    )
 
             elapsed = time.time() - start_time
             remaining = self.timedelay - elapsed
             if remaining > 0:
                 time.sleep(remaining)
 
-        cap.release()
+        cap.stop()
         logger.info(
             f"Поток камеры {self.cam_name} остановлен. Обработано кадров: {self.frames_processed}"
         )
@@ -337,7 +373,7 @@ def camera_polling_thread(stop_event):
     logger.info("Запуск потока опроса камер")
     while not stop_event.is_set():
         try:
-            new_cams = fetch_cameras_from_api()
+            new_cams = fetch_cameras_from_db()
             with cameras_lock:
                 current_ids = set(cameras.keys())
                 new_ids = {cam["cam_id"] for cam in new_cams}

@@ -92,21 +92,26 @@ class FRDatabase:
 
     @contextmanager
     def _get_connection(self) -> Iterator[psycopg2.extensions.connection]:
+        """Контекстный менеджер для безопасного получения соединения из пула"""
         conn = None
         with FRDatabase._semaphore:
             for attempt in range(3):
                 try:
                     conn = FRDatabase._connection_pool.getconn()
+                    # Проверка работоспособности
                     with conn.cursor() as cur:
                         cur.execute("SELECT 1")
                         if cur.fetchone()[0] != 1:
                             raise OperationalError("Проверочный запрос не прошёл")
-                    try:
-                        yield conn
-                    finally:
-                        if conn and not conn.closed:
-                            FRDatabase._connection_pool.putconn(conn)
+
+                    # Возвращаем соединение через yield
+                    yield conn
+
+                    # После использования возвращаем в пул
+                    if conn and not conn.closed:
+                        FRDatabase._connection_pool.putconn(conn)
                     return
+
                 except (OperationalError, InterfaceError) as e:
                     if conn:
                         FRDatabase._connection_pool.putconn(conn, close=True)
@@ -125,6 +130,7 @@ class FRDatabase:
 
     @contextmanager
     def _get_cursor(self, cursor_factory=None):
+        """Контекстный менеджер для работы с курсором"""
         with self._get_connection() as conn:
             cursor = (
                 conn.cursor(cursor_factory=cursor_factory)
@@ -304,6 +310,101 @@ class FRDatabase:
             rows = cursor.fetchall()
             return [dict(row) for row in rows]
 
+    def add_camera(self, camera_data: Dict) -> str:
+        """Добавляет или обновляет камеру в БД"""
+        query = """
+            INSERT INTO cameras (
+                cam_id, name, description, stream_to_parse, user_id, face_width_max,
+                timedelay, resize, crop_params, extraqueue, status,
+                motion_min_area, motion_threshold, motion_record_after_time,
+                created_at, updated_at
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, NOW(), NOW()
+            ) ON CONFLICT (cam_id) DO UPDATE SET
+                name = EXCLUDED.name,
+                description = EXCLUDED.description,
+                stream_to_parse = EXCLUDED.stream_to_parse,
+                user_id = EXCLUDED.user_id,
+                face_width_max = EXCLUDED.face_width_max,
+                timedelay = EXCLUDED.timedelay,
+                resize = EXCLUDED.resize,
+                crop_params = EXCLUDED.crop_params,
+                extraqueue = EXCLUDED.extraqueue,
+                status = EXCLUDED.status,
+                motion_min_area = EXCLUDED.motion_min_area,
+                motion_threshold = EXCLUDED.motion_threshold,
+                motion_record_after_time = EXCLUDED.motion_record_after_time,
+                updated_at = NOW()
+        """
+
+        params = (
+            camera_data["cam_id"],
+            camera_data["name"],
+            camera_data.get("description", camera_data["name"]),  # маппинг desc -> description
+            camera_data["stream_to_parse"],
+            camera_data["user_id"],
+            camera_data.get("face_width_max", 50),
+            camera_data.get("timedelay", 333),
+            camera_data.get("resize"),
+            (
+                json.dumps(camera_data.get("crop_params"))
+                if camera_data.get("crop_params")
+                else None
+            ),
+            camera_data.get("extraqueue", 1),
+            camera_data.get("status", "active"),
+            camera_data.get("motion_min_area", 500),
+            camera_data.get("motion_threshold", 25),
+            camera_data.get("motion_record_after_time", 3),
+        )
+
+        try:
+            with self._get_cursor() as cursor:
+                cursor.execute(query, params)
+            return camera_data["cam_id"]
+        except Exception as e:
+            print(f"Ошибка в add_camera: {e}")
+            import traceback
+
+            traceback.print_exc()
+        raise
+
+    def get_all_cameras(self, user_id: str = None) -> List[Dict]:
+        """Получает список камер из БД"""
+        with self._get_cursor(cursor_factory=RealDictCursor) as cursor:
+            if user_id:
+                cursor.execute(
+                    "SELECT * FROM cameras WHERE user_id = %s AND status = 'active' ORDER BY created_at",
+                    (user_id,),
+                )
+            else:
+                cursor.execute(
+                    "SELECT * FROM cameras WHERE status = 'active' ORDER BY created_at"
+                )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def get_camera(self, cam_id: str) -> Optional[Dict]:
+        """Получает камеру по ID"""
+        with self._get_cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute("SELECT * FROM cameras WHERE cam_id = %s", (cam_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def suspend_camera(self, cam_id: str) -> bool:
+        """Помечает камеру как suspended (или удаляет)"""
+        with self._get_cursor() as cursor:
+            cursor.execute(
+                "UPDATE cameras SET status = 'suspended', updated_at = NOW() WHERE cam_id = %s",
+                (cam_id,),
+            )
+            return cursor.rowcount > 0
+
+    def delete_camera(self, cam_id: str) -> bool:
+        """Полностью удаляет камеру из БД"""
+        with self._get_cursor() as cursor:
+            cursor.execute("DELETE FROM cameras WHERE cam_id = %s", (cam_id,))
+            return cursor.rowcount > 0
+
     def delete_person(self, person_id: str) -> Tuple[int, int]:
         with self._get_cursor(cursor_factory=RealDictCursor) as cursor:
             cursor.execute(
@@ -311,17 +412,20 @@ class FRDatabase:
             )
             files = [row["filein"] for row in cursor.fetchall()]
 
+            cursor.execute("DELETE FROM photo WHERE person_id = %s", (person_id,))
+            photo_deleted = cursor.rowcount
+
             cursor.execute("DELETE FROM percone WHERE person_id = %s", (person_id,))
             percone_deleted = cursor.rowcount
 
-        photo_deleted = 0
+        # Удаляем файлы с диска
         for fp in files:
             try:
                 if os.path.exists(fp):
                     os.remove(fp)
-                    photo_deleted += 1
-            except:
-                pass
+            except Exception as e:
+                print(f"Ошибка удаления файла {fp}: {e}")
+
         return percone_deleted, photo_deleted
 
     def delete_photo(self, photo_id: str) -> Tuple[int, str]:
@@ -430,7 +534,6 @@ class FRDatabase:
                 user_id=user_id, embedding=embedding, limit=1
             )
 
-            # Если нет результатов, создаём фиктивный с максимальным расстоянием
             if not results:
                 distance = 2.0
                 person_id = None
@@ -484,14 +587,19 @@ class FRDatabase:
                 )
                 distance2 = unk_result.get("distance") or max_distance
                 percent2 = self._percentage_fcb(distance2)
+
+                # Сохраняем unknown_uuid в поле data для передачи в log_event
+                unk_id = unk_result.get("id", "")
+
                 item["data"]["person"].update(
                     {
                         "facerecognized": False,
-                        "id": unk_result.get("id", ""),
+                        "id": unk_id,
                         "description": "",
                         "person_unknown": True,
                         "percent_unknown": round(percent2, 2),
                         "person_unknown_new": unk_result.get("action") == "created",
+                        "unknown_uuid": unk_id,  # добавляем для передачи
                     }
                 )
                 action_text = (
@@ -514,11 +622,18 @@ class FRDatabase:
 
     def log_event(self, event_data: Dict) -> bool:
         try:
+            # Базовые данные
             data_json = {
                 "camera_name": event_data.get("camera_name"),
                 "face_width": event_data.get("face_width"),
                 "snapshot_path": event_data.get("snapshot_path"),
             }
+
+            # Добавляем unknown_uuid, если это неизвестное лицо
+            if event_data.get("is_unknown") and event_data.get("unknown_uuid"):
+                data_json["unknown_uuid"] = event_data.get("unknown_uuid")
+
+            # Убираем None значения
             data_json = {k: v for k, v in data_json.items() if v is not None}
 
             person_photobank_id = event_data.get("person_id") or ""
@@ -530,7 +645,7 @@ class FRDatabase:
                     INSERT INTO analytics_events
                         (datetime, camera_id, type, person_photobank_id, event_id, created_at, data, is_unknown)
                     VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s)
-                """,
+                    """,
                     (
                         event_data["datetime"],
                         event_data["camera_id"],

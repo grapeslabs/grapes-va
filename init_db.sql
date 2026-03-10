@@ -20,6 +20,27 @@ CREATE INDEX IF NOT EXISTS percone_user_id_idx ON public.percone USING btree (us
 
 ALTER TABLE public.percone OWNER TO postgres;
 
+
+-- ========== Таблица камер ==========
+CREATE TABLE IF NOT EXISTS public.cameras (
+    cam_id VARCHAR(255) PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    description TEXT,  -- должно быть description, не desc
+    stream_to_parse TEXT NOT NULL,
+    user_id VARCHAR(255) NOT NULL,
+    face_width_max INTEGER DEFAULT 50,
+    timedelay INTEGER DEFAULT 333,
+    resize FLOAT,
+    crop_params JSONB,
+    extraqueue INTEGER DEFAULT 1,
+    status VARCHAR(50) DEFAULT 'active',
+    motion_min_area INTEGER DEFAULT 500,
+    motion_threshold INTEGER DEFAULT 25,
+    motion_record_after_time INTEGER DEFAULT 3,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
 -- ========== Таблица фотографий ==========
 CREATE TABLE IF NOT EXISTS public.photo (
     id_photo SERIAL,
