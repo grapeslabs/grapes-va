@@ -16,6 +16,7 @@ import queue
 from datetime import datetime
 from PIL import Image
 import numpy as np
+from dotenv import load_dotenv
 
 from libs.pinfacekirjasto.PinFace import PinFace
 from libs.detect_motion import MotionDetector
@@ -26,6 +27,8 @@ from libs.camstream import VideoCapture
 pFace = PinFace(ffmode="mtcnn", frmode="adaface")
 
 logger = ColorLogger("PACS_CORE", log_file="pacs_core.log", level=logging.INFO)
+
+load_dotenv()
 
 DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true"
 MIN_WIDTH_PHOTO = int(os.getenv("MIN_WIDTH_PHOTO", "50"))
@@ -63,7 +66,7 @@ def fetch_cameras_from_db():
                     "name": cam["name"],
                     "stream_to_parse": cam["stream_to_parse"],
                     "user_id": cam.get("user_id", '1'),
-                    "face_width_max": cam.get("face_width_max", MIN_WIDTH_PHOTO),
+                    "face_width_min": cam.get("face_width_min", MIN_WIDTH_PHOTO),
                     "timedelay": cam.get("timedelay", 333),
                     "motion_min_area": cam.get("motion_min_area", 500),
                     "motion_threshold": cam.get("motion_threshold", 25),
@@ -204,7 +207,7 @@ class CameraProcessor(threading.Thread):
             self.stream_url = int(self.stream_url)
 
         self.user_id = cam_config.get("user_id", "1")
-        self.face_width_max = cam_config.get("face_width_max", MIN_WIDTH_PHOTO)
+        self.face_width_min = cam_config.get("face_width_min", MIN_WIDTH_PHOTO)
         self.timedelay = cam_config.get("timedelay", 333) / 1000.0
         self.shared_queue = shared_queue
         self.frames_processed = 0
@@ -323,7 +326,7 @@ class CameraProcessor(threading.Thread):
                 face_widths = []
                 for b, f in zip(bboxes, faces):
                     w = int(b[2] - b[0])
-                    if w >= self.face_width_max:
+                    if w >= self.face_width_min:
                         filtered_faces.append(f)
                         face_widths.append(w)
 
@@ -382,7 +385,7 @@ def camera_polling_thread(stop_event):
                         old = cameras[cam_id].config
                         if (
                             old["stream_to_parse"] != cam["stream_to_parse"]
-                            or old.get("face_width_max") != cam.get("face_width_max")
+                            or old.get("face_width_min") != cam.get("face_width_min")
                             or old.get("timedelay") != cam.get("timedelay")
                             or old.get("motion_min_area") != cam.get("motion_min_area")
                             or old.get("motion_threshold")

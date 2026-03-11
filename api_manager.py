@@ -15,18 +15,21 @@ from PIL import Image
 import io
 import numpy as np
 import cv2
+from dotenv import load_dotenv
 
 from libs.pinfacekirjasto.PinFace import PinFace
 from libs.DbLibrary import FRDatabase
 from libs.color_logger import ColorLogger
 
+load_dotenv()
+
 pFace = PinFace(ffmode="mtcnn", frmode="adaface")
 
 logger = ColorLogger("PACS_API", log_file="pacs_api.log", level=logging.INFO)
 
-DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true"
+DEBUG_MODE = str(os.getenv("DEBUG_MODE", "false")).lower() == "true"
 API_PORT = int(os.getenv("API_PORT", "5000"))
-PERSON_PHOTOS_PATH = os.getenv("PERSON_PHOTOS_PATH", "./person_photos")
+PERSON_AVATARS_PATH = os.getenv("PERSON_AVATARS_PATH", "./person_photos")
 MIN_WIDTH_PHOTO = int(os.getenv("MIN_WIDTH_PHOTO", "50"))
 
 # Параметры детектора движения по умолчанию
@@ -34,13 +37,8 @@ MOTION_MIN_AREA = int(os.getenv("MOTION_MIN_AREA", "500"))
 MOTION_THRESHOLD = int(os.getenv("MOTION_THRESHOLD", "25"))
 MOTION_RECORD_AFTER_TIME = int(os.getenv("MOTION_RECORD_AFTER_TIME", "3"))
 
-
-SAVE_AVATARS = os.getenv("SAVE_AVATARS", "false").lower() == "true"
-AVATARS_PATH = os.getenv("AVATARS_PATH", "./person_avatars")
-
-if SAVE_AVATARS and not os.path.exists(AVATARS_PATH):
-    os.makedirs(AVATARS_PATH, exist_ok=True)
-    logger.info(f"Создана папка для аватаров: {AVATARS_PATH}")
+SAVE_PHOTOS = os.getenv("SAVE_PHOTOS", 'false').lower() == "true"
+PHOTOS_PATH = os.getenv("PHOTOS_PATH", "./person_avatars")
 
 fr_db = FRDatabase()
 
@@ -87,7 +85,7 @@ def create_camera():
         "desc": data.get("description", name),
         "stream_to_parse": stream_to_parse,
         "user_id": user_id,
-        "face_width_max": data.get("face_width_max", MIN_WIDTH_PHOTO),
+        "face_width_min": data.get("face_width_min", MIN_WIDTH_PHOTO),
         "timedelay": data.get("timedelay", 333),
         "resize": data.get("resize"),
         "crop_params": data.get("crop_params"),
@@ -217,9 +215,9 @@ def add_person():
                 except Exception as e:
                     print(f"Ошибка открытия изображения: {e}")
                     # Сохраняем оригинал даже при ошибке
-                    if SAVE_AVATARS:
+                    if SAVE_PHOTOS:
                         avatar_filename = f"error_{person_id}_{generate_short_id()}.jpg"
-                        avatar_path = os.path.join(AVATARS_PATH, avatar_filename)
+                        avatar_path = os.path.join(PHOTOS_PATH, avatar_filename)
                         with open(avatar_path, "wb") as f:
                             f.write(img_bytes)
                         logger.info(f"Сохранен оригинал с ошибкой: {avatar_path}")
@@ -229,7 +227,7 @@ def add_person():
                 bboxes, faces, _ = pFace.face_detection(img)
 
                 # Сохраняем аватар с рамками если нужно
-                if SAVE_AVATARS:
+                if SAVE_PHOTOS:
                     img_cv = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
 
                     # Рисуем рамки вокруг всех найденных лиц
@@ -247,34 +245,56 @@ def add_person():
                         )
 
                     avatar_filename = f"{person_id}_{generate_short_id()}.jpg"
-                    avatar_path = os.path.join(AVATARS_PATH, avatar_filename)
+                    avatar_path = os.path.join(PHOTOS_PATH, avatar_filename)
                     cv2.imwrite(avatar_path, img_cv)
                     logger.info(f"Сохранен аватар: {avatar_path}")
 
+                    if not faces:
+                        logger.warning(
+                            f"Все найденные лица на {photo_file.filename} меньше минимальной ширины {MIN_WIDTH_PHOTO}px"
+                        )
+                        continue
+
                 if not faces:
-                    print(f"Лица не найдены на изображении {photo_file.filename}")
+                    logger.warning(
+                        f"Лица не найдены на изображении {photo_file.filename}"
+                    )
                     continue
 
                 if len(faces) > 1:
-                    print(
-                        f"Найдено более одного лица ({len(faces)}) на изображении {photo_file.filename}, пропуск"
+                    logger.warning(
+                        f"Найдено более одного лица ({len(faces)}) на изображении {photo_file.filename}. Поиск лица с максимальной шириной"
                     )
-                    continue
+
+                    # Находим индекс лица с максимальной шириной
+                    max_width = -1
+                    best_index = -1
+
+                    for idx, bbox in enumerate(bboxes):
+                        width = int(bbox[2]) - int(bbox[0])
+                        if width > max_width:
+                            max_width = width
+                            best_index = idx
+
+                    faces = [faces[best_index]]
+                    bboxes = [bboxes[best_index]]
+
+                    print(f"Бывший номер: {best_index+1}, ширина: {max_width}")
 
                 # Изображение подходит - строим вектор для найденного лица
                 face = faces[0]
                 embeddings = pFace.face_recognition(faces=[face])
 
                 if not embeddings:
-                    print(
+                    logger.warning(
                         f"Не удалось построить вектор для лица на {photo_file.filename}"
                     )
                     continue
 
                 photo_id = generate_short_id()
                 filename = f"{person_id}_{photo_id}.jpg"
-                file_path = os.path.join(PERSON_PHOTOS_PATH, filename)
-                os.makedirs(PERSON_PHOTOS_PATH, exist_ok=True)
+                file_path = os.path.join(PERSON_AVATARS_PATH, filename)
+                os.makedirs(PERSON_AVATARS_PATH, exist_ok=True)
 
                 # Сохраняем только вырезанное лицо
                 face_cv = cv2.cvtColor(np.array(face), cv2.COLOR_RGB2BGR)
@@ -312,7 +332,7 @@ def add_person():
             if os.path.exists(path):
                 os.remove(path)
         except Exception as e:
-            print(f"Ошибка удаления файла {path}: {e}")
+            logger.warning(f"Ошибка удаления файла {path}: {e}")
 
     response = {
         "person_id": person_id,
@@ -479,5 +499,11 @@ def get_events():
 
 
 if __name__ == "__main__":
+    if SAVE_PHOTOS:
+        try:
+            os.makedirs(PHOTOS_PATH, exist_ok=True)
+            logger.info(f"Создана папка для фотографий с выделенными лицами: {PHOTOS_PATH}")
+        except Exception as e:
+            logger.warning(f"Ошибка создания папки: {e}")
     logger.info(f"Запуск объединённого API на порту {API_PORT}")
     app.run(host="0.0.0.0", port=API_PORT, debug=DEBUG_MODE)

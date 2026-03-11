@@ -15,10 +15,13 @@ from typing import List, Dict, Optional, Tuple, Iterator
 from contextlib import contextmanager
 import json
 from functools import lru_cache
+from dotenv import load_dotenv
 
 import psycopg2
 from psycopg2 import pool, OperationalError, InterfaceError
 from psycopg2.extras import DictCursor, RealDictCursor
+
+load_dotenv()
 
 PG_HOST = os.getenv("PG_HOST", "localhost")
 PG_PORT = os.getenv("PG_PORT", "5432")
