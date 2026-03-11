@@ -34,6 +34,14 @@ MOTION_MIN_AREA = int(os.getenv("MOTION_MIN_AREA", "500"))
 MOTION_THRESHOLD = int(os.getenv("MOTION_THRESHOLD", "25"))
 MOTION_RECORD_AFTER_TIME = int(os.getenv("MOTION_RECORD_AFTER_TIME", "3"))
 
+
+SAVE_AVATARS = os.getenv("SAVE_AVATARS", "false").lower() == "true"
+AVATARS_PATH = os.getenv("AVATARS_PATH", "./person_avatars")
+
+if SAVE_AVATARS and not os.path.exists(AVATARS_PATH):
+    os.makedirs(AVATARS_PATH, exist_ok=True)
+    logger.info(f"Создана папка для аватаров: {AVATARS_PATH}")
+
 fr_db = FRDatabase()
 
 app = Flask(__name__)
@@ -62,7 +70,7 @@ def create_camera():
         return make_response(False, message="Invalid JSON", status_code=400)
 
     stream_to_parse = data.get("stream_to_parse")
-    user_id = data.get("user_id")
+    user_id = data.get("user_id", "1")
     if not stream_to_parse or not user_id:
         return make_response(
             False,
@@ -208,10 +216,40 @@ def add_person():
                     img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
                 except Exception as e:
                     print(f"Ошибка открытия изображения: {e}")
+                    # Сохраняем оригинал даже при ошибке
+                    if SAVE_AVATARS:
+                        avatar_filename = f"error_{person_id}_{generate_short_id()}.jpg"
+                        avatar_path = os.path.join(AVATARS_PATH, avatar_filename)
+                        with open(avatar_path, "wb") as f:
+                            f.write(img_bytes)
+                        logger.info(f"Сохранен оригинал с ошибкой: {avatar_path}")
                     continue
 
                 # Поиск лиц на изображении
                 bboxes, faces, _ = pFace.face_detection(img)
+
+                # Сохраняем аватар с рамками если нужно
+                if SAVE_AVATARS:
+                    img_cv = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+
+                    # Рисуем рамки вокруг всех найденных лиц
+                    for bbox in bboxes:
+                        left = int(bbox[0])
+                        top = int(bbox[1])
+                        right = int(bbox[2])
+                        bottom = int(bbox[3])
+                        cv2.rectangle(
+                            img_cv,
+                            (left - 10, top - 10),
+                            (right + 10, bottom + 10),
+                            (0, 255, 0),
+                            2,
+                        )
+
+                    avatar_filename = f"{person_id}_{generate_short_id()}.jpg"
+                    avatar_path = os.path.join(AVATARS_PATH, avatar_filename)
+                    cv2.imwrite(avatar_path, img_cv)
+                    logger.info(f"Сохранен аватар: {avatar_path}")
 
                 if not faces:
                     print(f"Лица не найдены на изображении {photo_file.filename}")
@@ -318,7 +356,7 @@ def get_person_info():
 
 @app.route("/api/v1/person/getphoto", methods=["GET"])
 def get_photo_info():
-    user_id = request.args.get("user_id")
+    user_id = request.args.get("user_id", "1")
     person_id = request.args.get("person_id")
     photo_id = request.args.get("photo_id")
 
@@ -379,7 +417,7 @@ def delete_person():
 
 @app.route("/api/v1/person/delphoto", methods=["DELETE"])
 def delete_photo():
-    user_id = request.args.get("user_id")
+    user_id = request.args.get("user_id", "1")
     person_id = request.args.get("person_id")
     photo_id = request.args.get("photo_id")
 

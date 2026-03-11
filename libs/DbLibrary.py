@@ -205,7 +205,7 @@ class FRDatabase:
             return None
 
     def add_person(
-        self, user_id: str, person_id: str = None, description: str = ""
+        self, user_id: str = "1", person_id: str = None, description: str = ""
     ) -> str:
         if person_id is None:
             person_id = str(uuid.uuid4())
@@ -260,7 +260,7 @@ class FRDatabase:
                 )
             return True
 
-    def get_person_info(self, user_id: str, person_id: str = None) -> List[Dict]:
+    def get_person_info(self, user_id: str, person_id: str) -> List[Dict]:
         with self._get_cursor(cursor_factory=RealDictCursor) as cursor:
             if person_id:
                 cursor.execute(
@@ -286,7 +286,7 @@ class FRDatabase:
             return [dict(row) for row in rows]
 
     def get_photo_info(
-        self, user_id: str = None, person_id: str = None, photo_id: str = None
+        self, user_id: str = "1", person_id: str = None, photo_id: str = None
     ) -> List[Dict]:
         query = """
             SELECT ph.photo_id, ph.filein, ph.quality, ph.photo_dttm, p.person_id
@@ -369,7 +369,7 @@ class FRDatabase:
             traceback.print_exc()
         raise
 
-    def get_all_cameras(self, user_id: str = None) -> List[Dict]:
+    def get_all_cameras(self, user_id: str = "1") -> List[Dict]:
         """Получает список камер из БД"""
         with self._get_cursor(cursor_factory=RealDictCursor) as cursor:
             if user_id:
@@ -495,7 +495,7 @@ class FRDatabase:
         embedding: List[float],
         dtime: str,
         camera_id: str,
-        user_id: str = "",
+        user_id: str = "1",
         max_distance: float = 0.9,
         is_real: bool = False,
         is_multiple: bool = False,

@@ -62,7 +62,7 @@ def fetch_cameras_from_db():
                     "cam_id": cam["cam_id"],
                     "name": cam["name"],
                     "stream_to_parse": cam["stream_to_parse"],
-                    "user_id": cam["user_id"],
+                    "user_id": cam.get("user_id", '1'),
                     "face_width_max": cam.get("face_width_max", MIN_WIDTH_PHOTO),
                     "timedelay": cam.get("timedelay", 333),
                     "motion_min_area": cam.get("motion_min_area", 500),
@@ -114,10 +114,10 @@ def queue_worker(q, stop_event):
                 )
 
                 item, debug_text = db.process_face_recognition(
+                    user_id="1",
                     embedding=emb,
                     dtime=dtime_str,
                     camera_id=camera_id,
-                    user_id=user_id,
                     max_distance=0.9,
                     is_real=False,
                     is_multiple=False,
@@ -203,7 +203,7 @@ class CameraProcessor(threading.Thread):
         if len(self.stream_url) <= 3:
             self.stream_url = int(self.stream_url)
 
-        self.user_id = cam_config.get("user_id", "")
+        self.user_id = cam_config.get("user_id", "1")
         self.face_width_max = cam_config.get("face_width_max", MIN_WIDTH_PHOTO)
         self.timedelay = cam_config.get("timedelay", 333) / 1000.0
         self.shared_queue = shared_queue
