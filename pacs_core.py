@@ -16,6 +16,7 @@ import queue
 from datetime import datetime
 from PIL import Image
 import numpy as np
+import gc
 from dotenv import load_dotenv
 
 from libs.pinfacekirjasto.PinFace import PinFace
@@ -65,7 +66,7 @@ def fetch_cameras_from_db():
                     "cam_id": cam["cam_id"],
                     "name": cam["name"],
                     "stream_to_parse": cam["stream_to_parse"],
-                    "user_id": cam.get("user_id", '1'),
+                    "user_id": cam.get("user_id", "1"),
                     "face_width_min": cam.get("face_width_min", MIN_WIDTH_PHOTO),
                     "timedelay": cam.get("timedelay", 333),
                     "motion_min_area": cam.get("motion_min_area", 500),
@@ -73,7 +74,7 @@ def fetch_cameras_from_db():
                     "motion_record_after_time": cam.get("motion_record_after_time", 3),
                 }
             )
-        logger.info(f"Получено {len(cameras_list)} камер из БД")
+            
         return cameras_list
     except Exception as e:
         logger.error(f"Ошибка при запросе камер из БД: {e}")
@@ -133,9 +134,9 @@ def queue_worker(q, stop_event):
                     person_id = item["data"]["person"].get("id")
                     is_unknown = False
                     unknown_uuid = None
-                    
+
                     key = (camera_id, person_id)
-                    
+
                     last_seen = person_last_seen.get(key, 0)
                     if current_time - last_seen < PERSON_TIMEOUT:
                         logger.debug(f"Таймаут для персоны {person_id}, пропуск")
@@ -228,14 +229,10 @@ class CameraProcessor(threading.Thread):
             f"Motion params: min_area={self.motion_min_area}, threshold={self.motion_threshold}, record_after={self.motion_record_after_time}"
         )
 
-        # <-- НОВОЕ: параметры для контроля потери сигнала
-        max_consecutive_failures = 10  # сколько плохих кадров подряд считать потерей
-        consecutive_failures = 0  # счётчик текущих плохих кадров
-        max_reconnect_attempts = 5  # максимальное число попыток переподключения
-        reconnect_attempts = 0  # счётчик попыток переподключения
         logger.info(f"Попытка создания VideoCapture для камеры {self.cam_name}")
+
         try:
-            cap = VideoCapture(self.stream_url)
+            cap = VideoCapture(self.stream_url, self.camera_id)
             logger.info(
                 f"Обьект VideoCapture для камеры {self.cam_name} успешно создан"
             )
@@ -250,59 +247,16 @@ class CameraProcessor(threading.Thread):
             threshold=self.motion_threshold,
             record_after_time=self.motion_record_after_time,
         )
+
         logger.info(f"Запуск потока обработки кадров для камеры {self.cam_name}")
+
         while self.running:
+
             frame = cap.read()
+
             if frame is None:
-                consecutive_failures += 1
-
-                # Если ещё не достигнут порог, просто ждём и пробуем следующий кадр
-                if consecutive_failures < max_consecutive_failures:
-                    time.sleep(0.05)
-                    continue
-
-                # Достигнут порог – начинаем процедуру переподключения
-                reconnect_attempts += 1
-                logger.warning(
-                    f"Потеря сигнала с камеры {self.cam_name} в течение {consecutive_failures} кадров, "
-                    f"попытка переподключения {reconnect_attempts}/{max_reconnect_attempts}"
-                )
-
-                if reconnect_attempts >= max_reconnect_attempts:
-                    logger.error(
-                        f"Не удалось восстановить соединение с камерой {self.cam_name} "
-                        f"после {max_reconnect_attempts} попыток, завершение потока"
-                    )
-                    break
-
-                cap.stop()
-                time.sleep(2)
-
-                # Пытаемся открыть камеру заново
-                try:
-                    cap = VideoCapture(self.stream_url)
-                    if cap:
-                        logger.info(f"Переподключение к камере {self.cam_name} успешно")
-                        # Сбрасываем все счётчики
-                        reconnect_attempts = 0
-                        consecutive_failures = 0
-                        continue
-                    else:
-                        logger.error(
-                            f"Не удалось открыть камеру при переподключении {self.cam_name}"
-                        )
-                except Exception as e:
-                    logger.error(
-                        f"Ошибка при переподключении к камере {self.cam_name}: {e}"
-                    )
-
-                # Если не удалось открыть, делаем паузу и повторяем попытку переподключения
-                time.sleep(1)
+                time.sleep(0.1)
                 continue
-
-            # Успешное чтение кадра – сбрасываем счётчики ошибок
-            consecutive_failures = 0
-            reconnect_attempts = 0
 
             # Обработка движения
             motion, recording_active, area, area_box = motion_detector.process_frame(

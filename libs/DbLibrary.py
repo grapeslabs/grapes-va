@@ -537,7 +537,7 @@ class FRDatabase:
                 },
             }
 
-            if percent > percent_unknown:
+            if percent >= percent_unknown:
                 item["data"]["person"].update(
                     {
                         "facerecognized": True,
@@ -575,7 +575,7 @@ class FRDatabase:
                         "person_unknown": True,
                         "percent_unknown": round(percent2, 2),
                         "person_unknown_new": unk_result.get("action") == "created",
-                        "unknown_uuid": unk_id,  # добавляем для передачи
+                        "unknown_uuid": unk_id,
                     }
                 )
                 action_text = (
