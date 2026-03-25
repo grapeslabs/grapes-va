@@ -13,6 +13,7 @@ input/
 thumbnails/
 person_photos/
 events/
+logs/
 
 # Временные файлы
 *.tmp

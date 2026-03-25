@@ -6,7 +6,6 @@ pacs_api.py
 
 import os
 import uuid
-import base64
 import logging
 from datetime import datetime
 from flask import Flask, request, jsonify
@@ -16,12 +15,15 @@ import io
 import numpy as np
 import cv2
 from dotenv import load_dotenv
+import warnings
 
 from libs.pinfacekirjasto.PinFace import PinFace
 from libs.DbLibrary import FRDatabase
 from libs.color_logger import ColorLogger
 
 load_dotenv()
+
+warnings.filterwarnings("ignore", message=".*Could not initialize NNPACK*")
 
 pFace = PinFace(ffmode="mtcnn", frmode="adaface")
 

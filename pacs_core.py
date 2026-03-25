@@ -11,12 +11,10 @@ import cv2
 import threading
 import logging
 import uuid
-import requests
 import queue
 from datetime import datetime
-from PIL import Image
 import numpy as np
-import gc
+import warnings
 from dotenv import load_dotenv
 
 from libs.pinfacekirjasto.PinFace import PinFace
@@ -24,6 +22,8 @@ from libs.detect_motion import MotionDetector
 from libs.color_logger import ColorLogger
 from libs.DbLibrary import FRDatabase
 from libs.camstream import VideoCapture
+
+warnings.filterwarnings("ignore", message=".*Could not initialize NNPACK*")
 
 pFace = PinFace(ffmode="mtcnn", frmode="adaface")
 
@@ -353,6 +353,7 @@ def camera_polling_thread(stop_event):
                             proc = CameraProcessor(cam, shared_queue)
                             proc.start()
                             cameras[cam_id] = proc
+            logger.info(f"Получено {len(new_cams)} камер")
         except Exception as e:
             logger.error(f"Ошибка в потоке опроса камер: {e}")
 
