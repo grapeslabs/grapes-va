@@ -1,5 +1,14 @@
+import os
+
+os.environ["NNPACK_ENABLE"] = "0"
+
 import torch
 from torch.autograd import Variable
+
+torch.backends.mkldnn.enabled = False
+torch._C._set_nnpack_enabled(False)
+torch.backends.nnpack.enabled = False
+
 import math
 from PIL import Image
 import numpy as np

@@ -14,7 +14,6 @@ import uuid
 import queue
 from datetime import datetime
 import numpy as np
-import warnings
 from dotenv import load_dotenv
 
 from libs.pinfacekirjasto.PinFace import PinFace
@@ -23,7 +22,6 @@ from libs.color_logger import ColorLogger
 from libs.DbLibrary import FRDatabase
 from libs.camstream import VideoCapture
 
-warnings.filterwarnings("ignore", message=".*Could not initialize NNPACK*")
 
 pFace = PinFace(ffmode="mtcnn", frmode="adaface")
 

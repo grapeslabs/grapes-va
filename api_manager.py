@@ -15,15 +15,12 @@ import io
 import numpy as np
 import cv2
 from dotenv import load_dotenv
-import warnings
 
 from libs.pinfacekirjasto.PinFace import PinFace
 from libs.DbLibrary import FRDatabase
 from libs.color_logger import ColorLogger
 
 load_dotenv()
-
-warnings.filterwarnings("ignore", message=".*Could not initialize NNPACK*")
 
 pFace = PinFace(ffmode="mtcnn", frmode="adaface")
 

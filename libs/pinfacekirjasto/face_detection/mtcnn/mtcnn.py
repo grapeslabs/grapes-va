@@ -1,29 +1,45 @@
-from typing import Tuple
-import numpy as np
+import os
+
+os.environ["NNPACK_ENABLE"] = "0"
+
 import torch
-from PIL import Image
 from torch.autograd import Variable
 
-torch.backends.nnpack.enabled = False 
+torch.backends.mkldnn.enabled = False
+torch._C._set_nnpack_enabled(False)
+torch.backends.nnpack.enabled = False
+
+
+from typing import Tuple
+import numpy as np
+
+from PIL import Image
 
 import sys
-import os
 
 sys.path.insert(0, os.path.dirname(__file__))
 
 from mtcnn_pytorch.src.get_nets import PNet, RNet, ONet
-from mtcnn_pytorch.src.box_utils import nms, calibrate_box, get_image_boxes, convert_to_square
+from mtcnn_pytorch.src.box_utils import (
+    nms,
+    calibrate_box,
+    get_image_boxes,
+    convert_to_square,
+)
 from mtcnn_pytorch.src.first_stage import run_first_stage
-from mtcnn_pytorch.src.align_trans import get_reference_facial_points, warp_and_crop_face
+from mtcnn_pytorch.src.align_trans import (
+    get_reference_facial_points,
+    warp_and_crop_face,
+)
 
 
-class MTCNN():
-    def __init__(self, device: str = 'cuda:0', crop_size: Tuple[int, int] = (112, 112)):
+class MTCNN:
+    def __init__(self, device: str = "cuda:0", crop_size: Tuple[int, int] = (112, 112)):
         # kkk
-        if not torch.cuda.is_available() and device == 'cuda:0':
-            device = 'cpu'
+        if not torch.cuda.is_available() and device == "cuda:0":
+            device = "cpu"
 
-        assert device in ['cuda:0', 'cpu']
+        assert device in ["cuda:0", "cpu"]
         self.device = torch.device(device)
         assert crop_size in [(112, 112), (96, 112)]
         self.crop_size = crop_size
@@ -38,7 +54,9 @@ class MTCNN():
         self.pnet.eval()
         self.rnet.eval()
         self.onet.eval()
-        self.refrence = get_reference_facial_points(default_square=crop_size[0] == crop_size[1])
+        self.refrence = get_reference_facial_points(
+            default_square=crop_size[0] == crop_size[1]
+        )
 
         # Параметры для детекции лиц
         # Оригинальные параметры:
@@ -54,25 +72,31 @@ class MTCNN():
         self.nms_thresholds = [0.7, 0.7, 0.7]
         self.factor = 0.85
 
-
-
         os.chdir(cwd)
 
     def align(self, img):
-        _, landmarks = self.detect_faces(img, self.min_face_size, self.thresholds, self.nms_thresholds, self.factor)
+        _, landmarks = self.detect_faces(
+            img, self.min_face_size, self.thresholds, self.nms_thresholds, self.factor
+        )
         facial5points = [[landmarks[0][j], landmarks[0][j + 5]] for j in range(5)]
-        warped_face = warp_and_crop_face(np.array(img), facial5points, self.refrence, crop_size=self.crop_size)
+        warped_face = warp_and_crop_face(
+            np.array(img), facial5points, self.refrence, crop_size=self.crop_size
+        )
         return Image.fromarray(warped_face)
 
     def align_multi(self, img, limit=None):
-        boxes, landmarks = self.detect_faces(img, self.min_face_size, self.thresholds, self.nms_thresholds, self.factor)
+        boxes, landmarks = self.detect_faces(
+            img, self.min_face_size, self.thresholds, self.nms_thresholds, self.factor
+        )
         if limit:
             boxes = boxes[:limit]
             landmarks = landmarks[:limit]
         faces = []
         for landmark in landmarks:
             facial5points = [[landmark[j], landmark[j + 5]] for j in range(5)]
-            warped_face = warp_and_crop_face(np.array(img), facial5points, self.refrence, crop_size=self.crop_size)
+            warped_face = warp_and_crop_face(
+                np.array(img), facial5points, self.refrence, crop_size=self.crop_size
+            )
             faces.append(Image.fromarray(warped_face))
         return boxes, faces
 
@@ -119,7 +143,9 @@ class MTCNN():
         with torch.no_grad():
             # run P-Net on different scales
             for s in scales:
-                boxes = run_first_stage(image, self.pnet, scale=s, threshold=thresholds[0])
+                boxes = run_first_stage(
+                    image, self.pnet, scale=s, threshold=thresholds[0]
+                )
                 bounding_boxes.append(boxes)
 
             # collect boxes (and offsets, and scores) from different scales
@@ -132,7 +158,9 @@ class MTCNN():
             bounding_boxes = bounding_boxes[keep]
 
             # use offsets predicted by pnet to transform bounding boxes
-            bounding_boxes = calibrate_box(bounding_boxes[:, 0:5], bounding_boxes[:, 5:])
+            bounding_boxes = calibrate_box(
+                bounding_boxes[:, 0:5], bounding_boxes[:, 5:]
+            )
             # shape [n_boxes, 5]
 
             bounding_boxes = convert_to_square(bounding_boxes)
@@ -149,7 +177,7 @@ class MTCNN():
 
             keep = np.where(probs[:, 1] > thresholds[1])[0]
             bounding_boxes = bounding_boxes[keep]
-            bounding_boxes[:, 4] = probs[keep, 1].reshape((-1, ))
+            bounding_boxes[:, 4] = probs[keep, 1].reshape((-1,))
             offsets = offsets[keep]
 
             keep = nms(bounding_boxes, nms_thresholds[1])
@@ -171,7 +199,7 @@ class MTCNN():
 
             keep = np.where(probs[:, 1] > thresholds[2])[0]
             bounding_boxes = bounding_boxes[keep]
-            bounding_boxes[:, 4] = probs[keep, 1].reshape((-1, ))
+            bounding_boxes[:, 4] = probs[keep, 1].reshape((-1,))
             offsets = offsets[keep]
             landmarks = landmarks[keep]
 
@@ -179,11 +207,15 @@ class MTCNN():
             width = bounding_boxes[:, 2] - bounding_boxes[:, 0] + 1.0
             height = bounding_boxes[:, 3] - bounding_boxes[:, 1] + 1.0
             xmin, ymin = bounding_boxes[:, 0], bounding_boxes[:, 1]
-            landmarks[:, 0:5] = np.expand_dims(xmin, 1) + np.expand_dims(width, 1) * landmarks[:, 0:5]
-            landmarks[:, 5:10] = np.expand_dims(ymin, 1) + np.expand_dims(height, 1) * landmarks[:, 5:10]
+            landmarks[:, 0:5] = (
+                np.expand_dims(xmin, 1) + np.expand_dims(width, 1) * landmarks[:, 0:5]
+            )
+            landmarks[:, 5:10] = (
+                np.expand_dims(ymin, 1) + np.expand_dims(height, 1) * landmarks[:, 5:10]
+            )
 
             bounding_boxes = calibrate_box(bounding_boxes, offsets)
-            keep = nms(bounding_boxes, nms_thresholds[2], mode='min')
+            keep = nms(bounding_boxes, nms_thresholds[2], mode="min")
             bounding_boxes = bounding_boxes[keep]
             landmarks = landmarks[keep]
 
