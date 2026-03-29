@@ -18,13 +18,19 @@ from dotenv import load_dotenv
 
 from libs.pinfacekirjasto.PinFace import PinFace
 from libs.DbLibrary import FRDatabase
-from libs.color_logger import ColorLogger
+from libs.loglib import capture_message, shutdown
+import atexit
 
 load_dotenv()
 
-pFace = PinFace(ffmode="mtcnn", frmode="adaface")
+try:
+    pFace = PinFace(ffmode="mtcnn", frmode="adaface")
+    capture_message("info", "PinFace initialized successfully")
+except Exception as e:
+    capture_message("error", f"Failed to initialize PinFace: {e}")
+    raise SystemExit(1)
 
-logger = ColorLogger("PACS_API", log_file="pacs_api.log", level=logging.INFO)
+atexit.register(shutdown)
 
 DEBUG_MODE = str(os.getenv("DEBUG_MODE", "false")).lower() == "true"
 API_PORT = int(os.getenv("API_PORT", "5000"))
@@ -39,7 +45,12 @@ MOTION_RECORD_AFTER_TIME = int(os.getenv("MOTION_RECORD_AFTER_TIME", "3"))
 SAVE_PHOTOS = os.getenv("SAVE_PHOTOS", 'false').lower() == "true"
 PHOTOS_PATH = os.getenv("PHOTOS_PATH", "./person_avatars")
 
-fr_db = FRDatabase()
+try:
+    fr_db = FRDatabase()
+    capture_message("info", "Database connection established")
+except Exception as e:
+    capture_message("error", f"Failed to connect to database: {e}")
+    raise SystemExit(1)
 
 app = Flask(__name__)
 CORS(app)
@@ -99,8 +110,7 @@ def create_camera():
 
     # Сохраняем в БД
     fr_db.add_camera(camera_data)
-    logger.info(f"Camera {cam_id} created/updated in DB")
-    logger.info(f"Camera data: {camera_data}")
+    capture_message("info",f"Camera {cam_id} created/updated in DB")
 
     return make_response(
         True,
@@ -139,7 +149,7 @@ def suspend_camera():
 
     # Помечаем камеру как suspended в БД
     if fr_db.suspend_camera(cam_id):
-        logger.info(f"Camera {cam_id} suspended")
+        capture_message("info",f"Camera {cam_id} suspended")
         return make_response(
             True, {"status": "success", "filename": f"{cam_id}.json", "cam_id": cam_id}
         )
@@ -156,14 +166,10 @@ def add_person():
     photo_files = request.files.getlist("photos")
     person_id = request.form.get("person_id", generate_short_id())
 
-    print(f"Параметры запроса:")
-    print(f"  - user_id: {user_id}")
-    print(f"  - desc: {desc}")
-    print(f"  - person_id: {person_id}")
-    print(f"  - количество файлов: {len(photo_files)}")
+    capture_message("info", f"Добавление персоны: user_id={user_id}, person_id={person_id}, файлов={len(photo_files)}")
 
     if not user_id:
-        print("Ошибка: user_id is required")
+        capture_message("error", "user_id is required")
         return make_response(False, message="user_id is required", status_code=400)
 
     percone_dttm = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -212,14 +218,13 @@ def add_person():
                 try:
                     img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
                 except Exception as e:
-                    print(f"Ошибка открытия изображения: {e}")
+                    capture_message("error", f"Ошибка открытия изображения: {e}")
                     # Сохраняем оригинал даже при ошибке
                     if SAVE_PHOTOS:
                         avatar_filename = f"error_{person_id}_{generate_short_id()}.jpg"
                         avatar_path = os.path.join(PHOTOS_PATH, avatar_filename)
                         with open(avatar_path, "wb") as f:
                             f.write(img_bytes)
-                        logger.info(f"Сохранен оригинал с ошибкой: {avatar_path}")
                     continue
 
                 # Поиск лиц на изображении
@@ -246,22 +251,21 @@ def add_person():
                     avatar_filename = f"{person_id}_{generate_short_id()}.jpg"
                     avatar_path = os.path.join(PHOTOS_PATH, avatar_filename)
                     cv2.imwrite(avatar_path, img_cv)
-                    logger.info(f"Сохранен аватар: {avatar_path}")
 
                     if not faces:
-                        logger.warning(
+                        capture_message("warning",
                             f"Все найденные лица на {photo_file.filename} меньше минимальной ширины {MIN_WIDTH_PHOTO}px"
                         )
                         continue
 
                 if not faces:
-                    logger.warning(
+                    capture_message("warning",
                         f"Лица не найдены на изображении {photo_file.filename}"
                     )
                     continue
 
                 if len(faces) > 1:
-                    logger.warning(
+                    capture_message("warning",
                         f"Найдено более одного лица ({len(faces)}) на изображении {photo_file.filename}. Поиск лица с максимальной шириной"
                     )
 
@@ -278,14 +282,14 @@ def add_person():
                     faces = [faces[best_index]]
                     bboxes = [bboxes[best_index]]
 
-                    print(f"Бывший номер: {best_index+1}, ширина: {max_width}")
+                    capture_message("debug", f"Выбрано лицо #{best_index+1}, ширина: {max_width}")
 
                 # Изображение подходит - строим вектор для найденного лица
                 face = faces[0]
                 embeddings = pFace.face_recognition(faces=[face])
 
                 if not embeddings:
-                    logger.warning(
+                    capture_message("warning",
                         f"Не удалось построить вектор для лица на {photo_file.filename}"
                     )
                     continue
@@ -320,6 +324,7 @@ def add_person():
 
                 photo_ids.append(photo_id)
                 qualities.append(95)
+                capture_message("info", f"Фото сохранено: person_id={person_id}, photo_id={photo_id}, файл={filename}")
 
         if not is_update and not photo_ids:
             return make_response(
@@ -331,7 +336,7 @@ def add_person():
             if os.path.exists(path):
                 os.remove(path)
         except Exception as e:
-            logger.warning(f"Ошибка удаления файла {path}: {e}")
+            capture_message("warning",f"Ошибка удаления файла {path}: {e}")
 
     response = {
         "person_id": person_id,
@@ -343,6 +348,9 @@ def add_person():
         ),
         "is_update": is_update,
     }
+
+    action = "обновлена" if is_update else "добавлена"
+    capture_message("info", f"Персона {action}: person_id={person_id}, фото={len(photo_ids)}, user_id={user_id}")
 
     return make_response(True, response, status_code=201)
 
@@ -418,9 +426,13 @@ def delete_person():
             if file_path and os.path.exists(file_path):
                 try:
                     os.remove(file_path)
-                    logger.info(f"Удален файл: {file_path}")
                 except Exception as e:
-                    logger.error(f"Ошибка удаления файла {file_path}: {e}")
+                    capture_message("error",f"Ошибка удаления файла {file_path}: {e}")
+
+    if percone_deleted:
+        capture_message("info", f"Персона удалена: person_id={person_id}, фото={photo_deleted}, user_id={user_id}")
+    else:
+        capture_message("warning", f"Персона не найдена для удаления: person_id={person_id}")
 
     return make_response(
         True,
@@ -493,16 +505,18 @@ def get_events():
             rows = cursor.fetchall()
         return make_response(True, {"events": rows, "count": len(rows)})
     except Exception as e:
-        logger.error(f"Ошибка получения событий: {e}")
+        capture_message("error",f"Ошибка получения событий: {e}")
         return make_response(False, message=str(e), status_code=500)
 
 
 if __name__ == "__main__":
+    capture_message("info", "PACS API starting...")
+    
     if SAVE_PHOTOS:
         try:
             os.makedirs(PHOTOS_PATH, exist_ok=True)
-            logger.info(f"Создана папка для фотографий с выделенными лицами: {PHOTOS_PATH}")
         except Exception as e:
-            logger.warning(f"Ошибка создания папки: {e}")
-    logger.info(f"Запуск объединённого API на порту {API_PORT}")
+            capture_message("warning",f"Ошибка создания папки: {e}")
+    
+    capture_message("info", f"PACS API started on port {API_PORT}")
     app.run(host="0.0.0.0", port=API_PORT, debug=DEBUG_MODE)

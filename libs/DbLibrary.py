@@ -27,7 +27,8 @@ PG_HOST = os.getenv("PG_HOST", "localhost")
 PG_PORT = os.getenv("PG_PORT", "5432")
 PG_USER = os.getenv("PG_USER", "postgres")
 PG_PASSWORD = os.getenv("PG_PASSWORD", "postgres")
-FR_DB = os.getenv("FR_DB", "fr")
+PG_DATABASE = os.getenv("PG_DATABASE", "fr")
+
 PERSON_PHOTOS_PATH = os.getenv("PERSON_PHOTOS_PATH", "/data/person_photos")
 
 EUCLIDEAN_THRESHOLD = float(os.getenv("EUCLIDEAN_THRESHOLD", "0.6"))
@@ -73,7 +74,7 @@ class FRDatabase:
         self.db_config = {
             "user": PG_USER,
             "password": PG_PASSWORD,
-            "database": FR_DB,
+            "database": PG_DATABASE,
             "host": PG_HOST,
             "port": PG_PORT,
             "application_name": "FRDatabase",

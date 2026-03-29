@@ -1,11 +1,7 @@
-# import net
-# from adaface import net
 import os
-
 os.environ["NNPACK_ENABLE"] = "0"
 
 from libs.pinfacekirjasto.face_recognition.adaface import net
-
 import torch
 from torch.autograd import Variable
 

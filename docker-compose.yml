@@ -7,7 +7,7 @@ services:
     environment:
       POSTGRES_USER: ${PG_USER}
       POSTGRES_PASSWORD: ${PG_PASSWORD}
-      POSTGRES_DB: ${FR_DB}
+      POSTGRES_DB: ${PG_DATABASE}
     ports:
       - "5432:5432"
     volumes:
@@ -31,7 +31,7 @@ services:
       - PG_PORT=5432
       - PG_USER=${PG_USER}
       - PG_PASSWORD=${PG_PASSWORD}
-      - FR_DB=${FR_DB}
+      - PG_DATABASE=${PG_DATABASE}
       - API_PORT=${API_PORT}
       - DEBUG_MODE=${DEBUG_MODE}
       - PERSON_PHOTOS_PATH=/app/person_photos
@@ -60,7 +60,7 @@ services:
       - PG_PORT=5432
       - PG_USER=${PG_USER}
       - PG_PASSWORD=${PG_PASSWORD}
-      - FR_DB=${FR_DB}
+      - PG_DATABASE=${PG_DATABASE}
       - PACS_API_URL=http://api:${API_PORT}
       - THUMBNAIL_PATH=/app/thumbnails
       - DEBUG_MODE=${DEBUG_MODE}

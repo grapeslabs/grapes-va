@@ -18,16 +18,28 @@ from dotenv import load_dotenv
 
 from libs.pinfacekirjasto.PinFace import PinFace
 from libs.detect_motion import MotionDetector
-from libs.color_logger import ColorLogger
+from libs.loglib import capture_message, shutdown
 from libs.DbLibrary import FRDatabase
 from libs.camstream import VideoCapture
-
-
-pFace = PinFace(ffmode="mtcnn", frmode="adaface")
-
-logger = ColorLogger("PACS_CORE", log_file="pacs_core.log", level=logging.INFO)
+import atexit
 
 load_dotenv()
+
+try:
+    pFace = PinFace(ffmode="mtcnn", frmode="adaface")
+    capture_message("info", "PinFace initialized successfully")
+except Exception as e:
+    capture_message("error", f"Failed to initialize PinFace: {e}")
+    raise SystemExit(1)
+
+atexit.register(shutdown)
+
+try:
+    db = FRDatabase()
+    capture_message("info", "Database connection established")
+except Exception as e:
+    capture_message("error", f"Failed to connect to database: {e}")
+    raise SystemExit(1)
 
 DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true"
 MIN_WIDTH_PHOTO = int(os.getenv("MIN_WIDTH_PHOTO", "50"))
@@ -37,20 +49,11 @@ THUMBNAIL_PATH = os.getenv("THUMBNAIL_PATH", "input/thumbnails/")
 PACS_API_URL = os.getenv("PACS_API_URL", "http://localhost:5000")
 CAMERA_POLL_INTERVAL = int(os.getenv("CAMERA_POLL_INTERVAL", "5"))
 
-PG_HOST = os.getenv("PG_HOST", "localhost")
-PG_PORT = os.getenv("PG_PORT", "5432")
-PG_USER = os.getenv("PG_USER", "postgres")
-PG_PASSWORD = os.getenv("PG_PASSWORD", "postgres")
-FR_DB = os.getenv("FR_DB", "fr")
-
 os.makedirs(THUMBNAIL_PATH, exist_ok=True)
-
-db = FRDatabase()
 
 cameras = {}
 cameras_lock = threading.Lock()
 shared_queue = None
-
 
 def fetch_cameras_from_db():
     """Читает камеры напрямую из БД"""
@@ -75,12 +78,11 @@ def fetch_cameras_from_db():
             
         return cameras_list
     except Exception as e:
-        logger.error(f"Ошибка при запросе камер из БД: {e}")
+        capture_message("error",f"Ошибка при запросе камер из БД: {e}")
         return []
 
 
 def queue_worker(q, stop_event):
-    logger.info("Запуск потока обработчика очереди")
     processed_count = 0
     person_last_seen = {}  # для известных персон (camera_id, person_id)
     unknown_last_seen = {}  # для неизвестных персон (camera_id, unknown_uuid)
@@ -90,7 +92,6 @@ def queue_worker(q, stop_event):
         try:
             data = q.get(timeout=0.3)
             if data is None:
-                logger.info("Получен сигнал остановки обработчика очереди")
                 break
 
             processed_count += 1
@@ -137,7 +138,6 @@ def queue_worker(q, stop_event):
 
                     last_seen = person_last_seen.get(key, 0)
                     if current_time - last_seen < PERSON_TIMEOUT:
-                        logger.debug(f"Таймаут для персоны {person_id}, пропуск")
                         continue
                     person_last_seen[key] = current_time
 
@@ -146,23 +146,19 @@ def queue_worker(q, stop_event):
                     is_unknown = True
                     unknown_uuid = item["data"]["person"].get("unknown_uuid")
 
-                    # Проверяем таймаут для неизвестной персоны
                     if unknown_uuid:
                         key = (camera_id, unknown_uuid)
                         last_seen = unknown_last_seen.get(key, 0)
                         if current_time - last_seen < PERSON_TIMEOUT:
-                            logger.debug(
-                                f"Таймаут для неизвестной {unknown_uuid}, пропуск"
-                            )
                             continue
                         unknown_last_seen[key] = current_time
 
                 # Логирование и запись в БД
-                print(f"  Результат: {debug_text}")
-                print(f"  Распознано: {recognized}")
-                print(f"  Person ID: {person_id}")
-                print(f"  Unknown UUID: {unknown_uuid}")
-                print(f"  Процент: {item['data']['person'].get('percent')}")
+                percent = item['data']['person'].get('percent')
+                if recognized:
+                    capture_message("info", f"Распознано: person_id={person_id}, камера={camera_name}, процент={percent}")
+                else:
+                    capture_message("info", f"Неизвестное лицо: uuid={unknown_uuid}, камера={camera_name}, процент={percent}")
 
                 event_data = {
                     "event_id": event_uuid,
@@ -179,18 +175,15 @@ def queue_worker(q, stop_event):
 
                 if not DEBUG_MODE:
                     if db.log_event(event_data):
-                        logger.info(f"Событие {event_uuid} записано в БД")
+                        status = "распознан" if recognized else "неизвестный"
+                        capture_message("info", f"Ивент записан: event={event_uuid}, {status}, камера={camera_name}, person_id={person_id or 'N/A'}")
                     else:
-                        logger.error(f"Ошибка записи события {event_uuid} в БД")
+                        capture_message("error",f"Ошибка записи события {event_uuid} в БД")
 
         except queue.Empty:
             continue
         except Exception as e:
-            logger.error(f"Ошибка в queue_worker: {e}")
-
-    logger.info(
-        f"Обработчик очереди завершил работу. Всего обработано сообщений: {processed_count}"
-    )
+            capture_message("error",f"Ошибка в queue_worker: {e}")
 
 
 class CameraProcessor(threading.Thread):
@@ -222,21 +215,10 @@ class CameraProcessor(threading.Thread):
             os.mkdir(self.events_dir_path)
 
     def run(self):
-        logger.info(f"Запуск потока камеры: {self.cam_name} ({self.camera_id})")
-        logger.info(
-            f"Motion params: min_area={self.motion_min_area}, threshold={self.motion_threshold}, record_after={self.motion_record_after_time}"
-        )
-
-        logger.info(f"Попытка создания VideoCapture для камеры {self.cam_name}")
-
         try:
             cap = VideoCapture(self.stream_url, self.camera_id)
-            logger.info(
-                f"Обьект VideoCapture для камеры {self.cam_name} успешно создан"
-            )
-
         except Exception as e:
-            logger.error(f"Ошибка создания VideoCapture: {e}")
+            capture_message("error",f"Ошибка создания VideoCapture для камеры {self.cam_name}: {e}")
             return
 
         # Инициализация детектора движения
@@ -245,8 +227,6 @@ class CameraProcessor(threading.Thread):
             threshold=self.motion_threshold,
             record_after_time=self.motion_record_after_time,
         )
-
-        logger.info(f"Запуск потока обработки кадров для камеры {self.cam_name}")
 
         while self.running:
 
@@ -306,13 +286,9 @@ class CameraProcessor(threading.Thread):
                 time.sleep(remaining)
 
         cap.stop()
-        logger.info(
-            f"Поток камеры {self.cam_name} остановлен. Обработано кадров: {self.frames_processed}"
-        )
 
 
 def camera_polling_thread(stop_event):
-    logger.info("Запуск потока опроса камер")
     while not stop_event.is_set():
         try:
             new_cams = fetch_cameras_from_db()
@@ -321,7 +297,7 @@ def camera_polling_thread(stop_event):
                 new_ids = {cam["cam_id"] for cam in new_cams}
 
                 for cam_id in current_ids - new_ids:
-                    logger.info(f"Камера {cam_id} удалена из API")
+                    capture_message("info",f"Камера {cam_id} удалена")
                     cameras[cam_id].running = False
                     cameras[cam_id].join(timeout=5)
                     del cameras[cam_id]
@@ -329,7 +305,7 @@ def camera_polling_thread(stop_event):
                 for cam in new_cams:
                     cam_id = cam["cam_id"]
                     if cam_id not in cameras:
-                        logger.info(f"Обнаружена новая камера: {cam['name']}")
+                        capture_message("info",f"Камера {cam['name']} добавлена")
                         proc = CameraProcessor(cam, shared_queue)
                         proc.start()
                         cameras[cam_id] = proc
@@ -345,24 +321,21 @@ def camera_polling_thread(stop_event):
                             or old.get("motion_record_after_time")
                             != cam.get("motion_record_after_time")
                         ):
-                            logger.info(f"Камера {cam_id} изменена")
+                            capture_message("info",f"Камера {cam_id} изменена")
                             cameras[cam_id].running = False
                             cameras[cam_id].join(timeout=5)
                             proc = CameraProcessor(cam, shared_queue)
                             proc.start()
                             cameras[cam_id] = proc
-            logger.info(f"Получено {len(new_cams)} камер")
         except Exception as e:
-            logger.error(f"Ошибка в потоке опроса камер: {e}")
+            capture_message("error",f"Ошибка в потоке опроса камер: {e}")
 
         stop_event.wait(timeout=CAMERA_POLL_INTERVAL)
 
 
 def main():
-    logger.info("=" * 50)
-    logger.info("Инициализация системы PACS Core...")
-    logger.info("=" * 50)
-
+    capture_message("info", "PACS Core starting...")
+    
     if not os.path.exists("events"):
         os.mkdir("events")
 
@@ -378,14 +351,13 @@ def main():
     poll_thread = threading.Thread(target=camera_polling_thread, args=(stop_event,))
     poll_thread.start()
 
-    logger.info("Система готова к работе")
-    logger.info("=" * 50)
-
+    capture_message("info", "PACS Core started successfully")
+    
     try:
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        logger.info("Получен сигнал остановки, завершение работы...")
+        capture_message("info", "PACS Core shutting down...")
         stop_event.set()
 
         with cameras_lock:
@@ -397,7 +369,7 @@ def main():
         queue_thread.join()
         poll_thread.join()
         db.close_all_connections()
-        logger.info("Система остановлена")
+        capture_message("info", "PACS Core stopped")
 
 
 if __name__ == "__main__":
