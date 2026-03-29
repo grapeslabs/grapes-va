@@ -375,6 +375,7 @@ class Logger:
         """Основной метод логирования с повторными попытками"""
         tags = kwargs.get("tags")
         extras = kwargs.get("extras")
+        force_sentry = kwargs.get("force_sentry", False)
 
         # ВСЕГДА пишем в локальный файл (полная запись)
         self._write_local(
@@ -385,8 +386,9 @@ class Logger:
         if self.logging_type == "local":
             return
 
-        # SENTRY режим: отправляем в Sentry только важные сообщения (не debug)
-        if level != "debug":
+        # SENTRY режим: только ошибки, критические и принудительные (lifecycle)
+        should_send_sentry = level in ("error", "critical") or force_sentry
+        if should_send_sentry:
             if self.sentry_available:
                 try:
                     sentry_capture_message(message, level=level, filename=filename, tags=tags, extras=extras)

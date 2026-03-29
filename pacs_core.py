@@ -334,7 +334,7 @@ def camera_polling_thread(stop_event):
 
 
 def main():
-    capture_message("info", "PACS Core starting...")
+    capture_message("info", "PACS Core starting...", force_sentry=True)
     
     if not os.path.exists("events"):
         os.mkdir("events")
@@ -351,13 +351,13 @@ def main():
     poll_thread = threading.Thread(target=camera_polling_thread, args=(stop_event,))
     poll_thread.start()
 
-    capture_message("info", "PACS Core started successfully")
+    capture_message("info", "PACS Core started successfully", force_sentry=True)
     
     try:
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        capture_message("info", "PACS Core shutting down...")
+        capture_message("info", "PACS Core shutting down...", force_sentry=True)
         stop_event.set()
 
         with cameras_lock:
@@ -369,7 +369,7 @@ def main():
         queue_thread.join()
         poll_thread.join()
         db.close_all_connections()
-        capture_message("info", "PACS Core stopped")
+        capture_message("info", "PACS Core stopped", force_sentry=True)
 
 
 if __name__ == "__main__":

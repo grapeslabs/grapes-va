@@ -510,7 +510,7 @@ def get_events():
 
 
 if __name__ == "__main__":
-    capture_message("info", "PACS API starting...")
+    capture_message("info", "PACS API starting...", force_sentry=True)
     
     if SAVE_PHOTOS:
         try:
@@ -518,5 +518,5 @@ if __name__ == "__main__":
         except Exception as e:
             capture_message("warning",f"Ошибка создания папки: {e}")
     
-    capture_message("info", f"PACS API started on port {API_PORT}")
+    capture_message("info", f"PACS API started on port {API_PORT}", force_sentry=True)
     app.run(host="0.0.0.0", port=API_PORT, debug=DEBUG_MODE)
