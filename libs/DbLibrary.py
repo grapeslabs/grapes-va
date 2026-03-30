@@ -21,6 +21,8 @@ import psycopg2
 from psycopg2 import pool, OperationalError, InterfaceError
 from psycopg2.extras import DictCursor, RealDictCursor
 
+from libs.loglib import capture_message
+
 load_dotenv()
 
 PG_HOST = os.getenv("PG_HOST", "localhost")
@@ -90,8 +92,9 @@ class FRDatabase:
                     FRDatabase._connection_pool = pool.ThreadedConnectionPool(
                         minconn=5, maxconn=20, **self.db_config
                     )
-                    print("Пул соединений PostgreSQL (FR) инициализирован")
+                    capture_message("info", "Пул соединений PostgreSQL (FR) инициализирован", force_sentry=True)
                 except Exception as e:
+                    capture_message("error", f"Ошибка создания пула: {e}")
                     raise RuntimeError(f"Ошибка создания пула: {e}")
 
     @contextmanager
@@ -121,6 +124,10 @@ class FRDatabase:
                         FRDatabase._connection_pool.putconn(conn, close=True)
                         conn = None
                     if attempt == 2:
+                        capture_message(
+                            "error",
+                            f"Не удалось получить рабочее соединение после 3 попыток: {e}",
+                        )
                         raise OperationalError(
                             f"Не удалось получить рабочее соединение после 3 попыток: {e}"
                         )
@@ -242,7 +249,7 @@ class FRDatabase:
                     with open(file_path, "wb") as f:
                         f.write(img_data)
                 except Exception as e:
-                    print(f"Ошибка сохранения фото {filename}: {e}")
+                    capture_message("error", f"Ошибка сохранения фото {filename}: {e}")
                     continue
 
                 cursor.execute(
@@ -367,7 +374,7 @@ class FRDatabase:
                 cursor.execute(query, params)
             return camera_data["cam_id"]
         except Exception as e:
-            print(f"Ошибка в add_camera: {e}")
+            capture_message("error", f"Ошибка в add_camera: {e}")
             import traceback
 
             traceback.print_exc()
@@ -428,7 +435,7 @@ class FRDatabase:
                 if os.path.exists(fp):
                     os.remove(fp)
             except Exception as e:
-                print(f"Ошибка удаления файла {fp}: {e}")
+                capture_message("error", f"Ошибка удаления файла {fp}: {e}")
 
         return percone_deleted, photo_deleted
 
@@ -636,7 +643,7 @@ class FRDatabase:
                 )
             return True
         except Exception as e:
-            print(f"Ошибка логирования события: {e}")
+            capture_message("error", f"Ошибка логирования события: {e}")
             return False
 
     def close_all_connections(self):
@@ -644,7 +651,7 @@ class FRDatabase:
             if FRDatabase._connection_pool:
                 FRDatabase._connection_pool.closeall()
                 FRDatabase._connection_pool = None
-                print("Все соединения PostgreSQL (FR) закрыты")
+                capture_message("info", "Все соединения PostgreSQL (FR) закрыты", force_sentry=True)
 
     def __del__(self):
         self.close_all_connections()

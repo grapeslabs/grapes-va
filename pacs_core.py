@@ -55,6 +55,7 @@ cameras = {}
 cameras_lock = threading.Lock()
 shared_queue = None
 
+
 def fetch_cameras_from_db():
     """Читает камеры напрямую из БД"""
     try:
@@ -75,10 +76,10 @@ def fetch_cameras_from_db():
                     "motion_record_after_time": cam.get("motion_record_after_time", 3),
                 }
             )
-            
+
         return cameras_list
     except Exception as e:
-        capture_message("error",f"Ошибка при запросе камер из БД: {e}")
+        capture_message("error", f"Ошибка при запросе камер из БД: {e}")
         return []
 
 
@@ -154,11 +155,17 @@ def queue_worker(q, stop_event):
                         unknown_last_seen[key] = current_time
 
                 # Логирование и запись в БД
-                percent = item['data']['person'].get('percent')
+                percent = item["data"]["person"].get("percent")
                 if recognized:
-                    capture_message("info", f"Распознано: person_id={person_id}, камера={camera_name}, процент={percent}")
+                    capture_message(
+                        "info",
+                        f"Распознано: person_id={person_id}, камера={camera_name}, процент={percent}",
+                    )
                 else:
-                    capture_message("info", f"Неизвестное лицо: uuid={unknown_uuid}, камера={camera_name}, процент={percent}")
+                    capture_message(
+                        "info",
+                        f"Неизвестное лицо: uuid={unknown_uuid}, камера={camera_name}, процент={percent}",
+                    )
 
                 event_data = {
                     "event_id": event_uuid,
@@ -176,14 +183,19 @@ def queue_worker(q, stop_event):
                 if not DEBUG_MODE:
                     if db.log_event(event_data):
                         status = "распознан" if recognized else "неизвестный"
-                        capture_message("info", f"Ивент записан: event={event_uuid}, {status}, камера={camera_name}, person_id={person_id or 'N/A'}")
+                        capture_message(
+                            "info",
+                            f"Ивент записан: event={event_uuid}, {status}, камера={camera_name}, person_id={person_id or 'N/A'}",
+                        )
                     else:
-                        capture_message("error",f"Ошибка записи события {event_uuid} в БД")
+                        capture_message(
+                            "error", f"Ошибка записи события {event_uuid} в БД"
+                        )
 
         except queue.Empty:
             continue
         except Exception as e:
-            capture_message("error",f"Ошибка в queue_worker: {e}")
+            capture_message("error", f"Ошибка в queue_worker: {e}")
 
 
 class CameraProcessor(threading.Thread):
@@ -218,7 +230,9 @@ class CameraProcessor(threading.Thread):
         try:
             cap = VideoCapture(self.stream_url, self.camera_id)
         except Exception as e:
-            capture_message("error",f"Ошибка создания VideoCapture для камеры {self.cam_name}: {e}")
+            capture_message(
+                "error", f"Ошибка создания VideoCapture для камеры {self.cam_name}: {e}"
+            )
             return
 
         # Инициализация детектора движения
@@ -297,7 +311,7 @@ def camera_polling_thread(stop_event):
                 new_ids = {cam["cam_id"] for cam in new_cams}
 
                 for cam_id in current_ids - new_ids:
-                    capture_message("info",f"Камера {cam_id} удалена")
+                    capture_message("info", f"Камера {cam_id} удалена")
                     cameras[cam_id].running = False
                     cameras[cam_id].join(timeout=5)
                     del cameras[cam_id]
@@ -305,7 +319,7 @@ def camera_polling_thread(stop_event):
                 for cam in new_cams:
                     cam_id = cam["cam_id"]
                     if cam_id not in cameras:
-                        capture_message("info",f"Камера {cam['name']} добавлена")
+                        capture_message("info", f"Камера {cam['name']} добавлена")
                         proc = CameraProcessor(cam, shared_queue)
                         proc.start()
                         cameras[cam_id] = proc
@@ -321,21 +335,20 @@ def camera_polling_thread(stop_event):
                             or old.get("motion_record_after_time")
                             != cam.get("motion_record_after_time")
                         ):
-                            capture_message("info",f"Камера {cam_id} изменена")
+                            capture_message("info", f"Камера {cam_id} изменена")
                             cameras[cam_id].running = False
                             cameras[cam_id].join(timeout=5)
                             proc = CameraProcessor(cam, shared_queue)
                             proc.start()
                             cameras[cam_id] = proc
         except Exception as e:
-            capture_message("error",f"Ошибка в потоке опроса камер: {e}")
+            capture_message("error", f"Ошибка в потоке опроса камер: {e}")
 
         stop_event.wait(timeout=CAMERA_POLL_INTERVAL)
 
 
 def main():
     capture_message("info", "PACS Core starting...", force_sentry=True)
-    
     if not os.path.exists("events"):
         os.mkdir("events")
 
@@ -352,7 +365,7 @@ def main():
     poll_thread.start()
 
     capture_message("info", "PACS Core started successfully", force_sentry=True)
-    
+
     try:
         while True:
             time.sleep(1)
