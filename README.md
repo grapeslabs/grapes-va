@@ -8,23 +8,12 @@
 
 ### 2. Установить Docker
 
-### 3. Проверить доступ к гиту
+### 3. Клонировать репозиторий
+
+### 4. Перейти в каталог с проектом
 
 ```
-ssh git@git.pinspb.ru
-```
-
-Должно вернуть:
-
-```
-PTY allocation request failed on channel 0
-```
-
-### 4. Клонировать репозиторий
-
-```
-git clone git@git.pinspb.ru:a.lishchina/docker_fr.git
-cd docker_face
+cd GrapesVA
 ```
 
 ### 5. Создать файл окружения
@@ -55,7 +44,7 @@ SAVE_PHOTOS=true
 # Logging Settings
 LOGGING_TYPE= local - локальное логирование, sentry - local + отправка важных событий в sentry
 
-# Sentry - заполнить при использовании (формат: https://key@sentry.host/project_id)
+# Sentry - заполнить при использовании (формат DSN: https://key@sentry.host/project_id)
 SENTRY_DSN=
 SENTRY_ENVIRONMENT=development
 SENTRY_RELEASE=docker_face@1.0.0
