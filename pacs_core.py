@@ -21,18 +21,23 @@ from libs.detect_motion import MotionDetector
 from libs.loglib import capture_message, shutdown
 from libs.DbLibrary import FRDatabase
 from libs.camstream import VideoCapture
+from libs.FixedSizeList import FixedSizeList
 import atexit
 
 load_dotenv()
 
 try:
-    pFace = PinFace(ffmode="mtcnn", frmode="adaface")
+    pFace = PinFace(ffmode="mtcnn", frmode="adaface", fmode=['sface'])
     capture_message("info", "PinFace initialized successfully")
 except Exception as e:
     capture_message("error", f"Failed to initialize PinFace: {e}")
     raise SystemExit(1)
 
 atexit.register(shutdown)
+
+# FixedSizeList для коротких векторов sface (128)
+face_short_cache = FixedSizeList(max_size=50, time_len=5)
+EUCLIDIAN_DISTANCE_SEPARATING = 0.9
 
 try:
     db = FRDatabase()
@@ -85,9 +90,6 @@ def fetch_cameras_from_db():
 
 def queue_worker(q, stop_event):
     processed_count = 0
-    person_last_seen = {}  # для известных персон (camera_id, person_id)
-    unknown_last_seen = {}  # для неизвестных персон (camera_id, unknown_uuid)
-    PERSON_TIMEOUT = 3  # секунд
 
     while not stop_event.is_set():
         try:
@@ -98,99 +100,86 @@ def queue_worker(q, stop_event):
             processed_count += 1
             timestamp_num, camera_id, camera_name, user_id, faces, face_widths, _ = data
             timestamp = datetime.fromtimestamp(timestamp_num)
-            current_time = time.time()
 
-            embeddings = pFace.face_recognition(faces=faces)
-
-            for idx, emb in enumerate(embeddings):
-                face_img = faces[idx]
+            for idx, face in enumerate(faces):
                 face_width = face_widths[idx]
 
-                event_uuid = str(uuid.uuid4())
-                filename = f"{event_uuid}.jpeg"
-                full_path = os.path.join(THUMBNAIL_PATH, filename)
+                # 1. Строим короткий вектор sface (128)
+                embedding_short = pFace.face_recognition(faces=[face], frmode='sface')[0]
 
-                face_cv = cv2.cvtColor(np.array(face_img), cv2.COLOR_RGB2BGR)
-                cv2.imwrite(full_path, face_cv)
+                # 2. Проверяем в FixedSizeList - новое лицо или уже было
+                face_distance_min, _, _, _ = face_short_cache.get_EVmin(embedding_short)
 
-                dtime_str = datetime.fromtimestamp(timestamp_num).strftime(
-                    "%Y%m%d-%H%M%S-%f"
-                )
+                if face_distance_min > EUCLIDIAN_DISTANCE_SEPARATING:
+                    # Лицо новое - добавляем в кэш
+                    face_short_cache.add(embedding_short.copy())
 
-                item, debug_text = db.process_face_recognition(
-                    user_id="1",
-                    embedding=emb,
-                    dtime=dtime_str,
-                    camera_id=camera_id,
-                    max_distance=0.9,
-                    is_real=False,
-                    is_multiple=False,
-                    percent_unknown=79.5,
-                    image_data=full_path,
-                )
+                    # Строим длинный вектор adaface (512)
+                    embedding_full = pFace.face_recognition(faces=[face])[0]
 
-                recognized = item["data"]["person"].get("facerecognized", False)
-                if recognized:
-                    person_id = item["data"]["person"].get("id")
-                    is_unknown = False
-                    unknown_uuid = None
+                    # Сохраняем thumbnail
+                    event_uuid = str(uuid.uuid4())
+                    filename = f"{event_uuid}.jpeg"
+                    full_path = os.path.join(THUMBNAIL_PATH, filename)
+                    face_cv = cv2.cvtColor(np.array(face), cv2.COLOR_RGB2BGR)
+                    cv2.imwrite(full_path, face_cv)
 
-                    key = (camera_id, person_id)
+                    dtime_str = datetime.fromtimestamp(timestamp_num).strftime("%Y%m%d-%H%M%S-%f")
 
-                    last_seen = person_last_seen.get(key, 0)
-                    if current_time - last_seen < PERSON_TIMEOUT:
-                        continue
-                    person_last_seen[key] = current_time
-
-                else:
-                    person_id = None
-                    is_unknown = True
-                    unknown_uuid = item["data"]["person"].get("unknown_uuid")
-
-                    if unknown_uuid:
-                        key = (camera_id, unknown_uuid)
-                        last_seen = unknown_last_seen.get(key, 0)
-                        if current_time - last_seen < PERSON_TIMEOUT:
-                            continue
-                        unknown_last_seen[key] = current_time
-
-                # Логирование и запись в БД
-                percent = item["data"]["person"].get("percent")
-                if recognized:
-                    capture_message(
-                        "info",
-                        f"Распознано: person_id={person_id}, камера={camera_name}, процент={percent}",
-                    )
-                else:
-                    capture_message(
-                        "info",
-                        f"Неизвестное лицо: uuid={unknown_uuid}, камера={camera_name}, процент={percent}",
+                    # Обработка распознавания
+                    item, debug_text = db.process_face_recognition(
+                        user_id="1",
+                        embedding=embedding_full,
+                        dtime=dtime_str,
+                        camera_id=camera_id,
+                        max_distance=0.9,
+                        is_real=False,
+                        is_multiple=False,
+                        percent_unknown=79.5,
+                        image_data=full_path,
                     )
 
-                event_data = {
-                    "event_id": event_uuid,
-                    "datetime": timestamp,
-                    "camera_id": camera_id,
-                    "camera_name": camera_name,
-                    "person_id": person_id,
-                    "is_unknown": is_unknown,
-                    "unknown_uuid": unknown_uuid,
-                    "face_width": face_width,
-                    "snapshot_path": full_path,
-                    "user_id": user_id,
-                }
-
-                if not DEBUG_MODE:
-                    if db.log_event(event_data):
-                        status = "распознан" if recognized else "неизвестный"
-                        capture_message(
-                            "info",
-                            f"Ивент записан: event={event_uuid}, {status}, камера={camera_name}, person_id={person_id or 'N/A'}",
-                        )
+                    recognized = item["data"]["person"].get("facerecognized", False)
+                    if recognized:
+                        person_id = item["data"]["person"].get("id")
+                        is_unknown = False
+                        unknown_uuid = None
                     else:
-                        capture_message(
-                            "error", f"Ошибка записи события {event_uuid} в БД"
-                        )
+                        person_id = None
+                        is_unknown = True
+                        unknown_uuid = item["data"]["person"].get("unknown_uuid")
+
+                    # Логирование
+                    percent = item["data"]["person"].get("percent")
+                    if recognized:
+                        capture_message("info", f"Распознано: person_id={person_id}, камера={camera_name}, процент={percent}")
+                    else:
+                        capture_message("info", f"Неизвестное лицо: uuid={unknown_uuid}, камера={camera_name}, процент={percent}")
+
+                    # Запись в БД
+                    event_data = {
+                        "event_id": event_uuid,
+                        "datetime": timestamp,
+                        "camera_id": camera_id,
+                        "camera_name": camera_name,
+                        "person_id": person_id,
+                        "is_unknown": is_unknown,
+                        "unknown_uuid": unknown_uuid,
+                        "face_width": face_width,
+                        "snapshot_path": full_path,
+                        "user_id": user_id,
+                    }
+
+                    if not DEBUG_MODE:
+                        if db.log_event(event_data):
+                            status = "распознан" if recognized else "неизвестный"
+                            capture_message("info", f"Ивент записан: event={event_uuid}, {status}, камера={camera_name}, person_id={person_id or 'N/A'}")
+                        else:
+                            capture_message("error", f"Ошибка записи события {event_uuid} в БД")
+                else:
+                    # Лицо уже было в последние 5 секунд - пропускаем
+                    capture_message("debug", f"Лицо пропущено (уже было), камера={camera_name}")
+                    continue
 
         except queue.Empty:
             continue
