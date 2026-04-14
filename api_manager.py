@@ -32,6 +32,7 @@ except Exception as e:
 
 atexit.register(shutdown)
 
+MODE = os.getenv("MODE", "pacs")
 DEBUG_MODE = str(os.getenv("DEBUG_MODE", "false")).lower() == "true"
 API_PORT = int(os.getenv("API_PORT", "5000"))
 PERSON_AVATARS_PATH = os.getenv("PERSON_AVATARS_PATH", "./person_photos")
@@ -42,7 +43,7 @@ MOTION_MIN_AREA = int(os.getenv("MOTION_MIN_AREA", "500"))
 MOTION_THRESHOLD = int(os.getenv("MOTION_THRESHOLD", "25"))
 MOTION_RECORD_AFTER_TIME = int(os.getenv("MOTION_RECORD_AFTER_TIME", "3"))
 
-SAVE_PHOTOS = os.getenv("SAVE_PHOTOS", 'false').lower() == "true"
+SAVE_PHOTOS = os.getenv("SAVE_PHOTOS", "false").lower() == "true"
 PHOTOS_PATH = os.getenv("PHOTOS_PATH", "./person_avatars")
 
 try:
@@ -69,6 +70,14 @@ def make_response(
 
 def generate_short_id() -> str:
     return str(uuid.uuid4())[24:]
+
+
+# Проверка работоспособности api
+
+@app.route("/api/c1/test", methods=["POST"])
+@app.route("/api/v1/test", methods=["POST"])
+def api_test():
+    return jsonify({"ok": True})
 
 
 @app.route("/api/c1/create", methods=["POST"])
@@ -109,8 +118,13 @@ def create_camera():
     }
 
     # Сохраняем в БД
-    fr_db.add_camera(camera_data)
-    capture_message("info",f"Camera {cam_id} created/updated in DB")
+    if MODE == "pacs":
+        fr_db.add_camera(camera_data)
+    if MODE == "pin":
+        # добавление камеры через сервер пин
+        pass
+
+    capture_message("info", f"Camera {cam_id} created/updated in DB")
 
     return make_response(
         True,
@@ -123,8 +137,12 @@ def create_camera():
 def list_cameras():
     user_id_filter = request.args.get("user_id")
 
-    # Получаем камеры из БД
-    cameras = fr_db.get_all_cameras(user_id_filter)
+    if MODE == "pacs":
+        # Получаем камеры из БД
+        cameras = fr_db.get_all_cameras(user_id_filter)
+    if MODE == "pin":
+        # получение камер через сервер пин
+        pass
 
     tasks = {"queue": {}, "suspended": {}}
     for cam in cameras:
@@ -147,12 +165,18 @@ def suspend_camera():
     if not cam_id:
         return make_response(False, message="cam_id required", status_code=400)
 
-    # Помечаем камеру как suspended в БД
-    if fr_db.suspend_camera(cam_id):
-        capture_message("info",f"Camera {cam_id} suspended")
-        return make_response(
-            True, {"status": "success", "filename": f"{cam_id}.json", "cam_id": cam_id}
-        )
+    if MODE == "pasc":
+        # Помечаем камеру как suspended в БД
+        if fr_db.suspend_camera(cam_id):
+            capture_message("info", f"Camera {cam_id} suspended")
+            return make_response(
+                True,
+                {"status": "success", "filename": f"{cam_id}.json", "cam_id": cam_id},
+            )
+    if MODE == "pin":
+        # удаление камеры через сервер пин
+        pass
+
     else:
         return make_response(
             False, message=f"Задание с cam_id '{cam_id}' не найдено", status_code=404
@@ -166,7 +190,10 @@ def add_person():
     photo_files = request.files.getlist("photos")
     person_id = request.form.get("person_id", generate_short_id())
 
-    capture_message("info", f"Добавление персоны: user_id={user_id}, person_id={person_id}, файлов={len(photo_files)}")
+    capture_message(
+        "info",
+        f"Добавление персоны: user_id={user_id}, person_id={person_id}, файлов={len(photo_files)}",
+    )
 
     if not user_id:
         capture_message("error", "user_id is required")
@@ -253,20 +280,23 @@ def add_person():
                     cv2.imwrite(avatar_path, img_cv)
 
                     if not faces:
-                        capture_message("warning",
-                            f"Все найденные лица на {photo_file.filename} меньше минимальной ширины {MIN_WIDTH_PHOTO}px"
+                        capture_message(
+                            "warning",
+                            f"Все найденные лица на {photo_file.filename} меньше минимальной ширины {MIN_WIDTH_PHOTO}px",
                         )
                         continue
 
                 if not faces:
-                    capture_message("warning",
-                        f"Лица не найдены на изображении {photo_file.filename}"
+                    capture_message(
+                        "warning",
+                        f"Лица не найдены на изображении {photo_file.filename}",
                     )
                     continue
 
                 if len(faces) > 1:
-                    capture_message("warning",
-                        f"Найдено более одного лица ({len(faces)}) на изображении {photo_file.filename}. Поиск лица с максимальной шириной"
+                    capture_message(
+                        "warning",
+                        f"Найдено более одного лица ({len(faces)}) на изображении {photo_file.filename}. Поиск лица с максимальной шириной",
                     )
 
                     # Находим индекс лица с максимальной шириной
@@ -282,15 +312,18 @@ def add_person():
                     faces = [faces[best_index]]
                     bboxes = [bboxes[best_index]]
 
-                    capture_message("debug", f"Выбрано лицо #{best_index+1}, ширина: {max_width}")
+                    capture_message(
+                        "debug", f"Выбрано лицо #{best_index+1}, ширина: {max_width}"
+                    )
 
                 # Изображение подходит - строим вектор для найденного лица
                 face = faces[0]
                 embeddings = pFace.face_recognition(faces=[face])
 
                 if not embeddings:
-                    capture_message("warning",
-                        f"Не удалось построить вектор для лица на {photo_file.filename}"
+                    capture_message(
+                        "warning",
+                        f"Не удалось построить вектор для лица на {photo_file.filename}",
                     )
                     continue
 
@@ -324,7 +357,10 @@ def add_person():
 
                 photo_ids.append(photo_id)
                 qualities.append(95)
-                capture_message("info", f"Фото сохранено: person_id={person_id}, photo_id={photo_id}, файл={filename}")
+                capture_message(
+                    "info",
+                    f"Фото сохранено: person_id={person_id}, photo_id={photo_id}, файл={filename}",
+                )
 
         if not is_update and not photo_ids:
             return make_response(
@@ -336,7 +372,7 @@ def add_person():
             if os.path.exists(path):
                 os.remove(path)
         except Exception as e:
-            capture_message("warning",f"Ошибка удаления файла {path}: {e}")
+            capture_message("warning", f"Ошибка удаления файла {path}: {e}")
 
     response = {
         "person_id": person_id,
@@ -350,7 +386,10 @@ def add_person():
     }
 
     action = "обновлена" if is_update else "добавлена"
-    capture_message("info", f"Персона {action}: person_id={person_id}, фото={len(photo_ids)}, user_id={user_id}")
+    capture_message(
+        "info",
+        f"Персона {action}: person_id={person_id}, фото={len(photo_ids)}, user_id={user_id}",
+    )
 
     return make_response(True, response, status_code=201)
 
@@ -427,12 +466,17 @@ def delete_person():
                 try:
                     os.remove(file_path)
                 except Exception as e:
-                    capture_message("error",f"Ошибка удаления файла {file_path}: {e}")
+                    capture_message("error", f"Ошибка удаления файла {file_path}: {e}")
 
     if percone_deleted:
-        capture_message("info", f"Персона удалена: person_id={person_id}, фото={photo_deleted}, user_id={user_id}")
+        capture_message(
+            "info",
+            f"Персона удалена: person_id={person_id}, фото={photo_deleted}, user_id={user_id}",
+        )
     else:
-        capture_message("warning", f"Персона не найдена для удаления: person_id={person_id}")
+        capture_message(
+            "warning", f"Персона не найдена для удаления: person_id={person_id}"
+        )
 
     return make_response(
         True,
@@ -505,18 +549,18 @@ def get_events():
             rows = cursor.fetchall()
         return make_response(True, {"events": rows, "count": len(rows)})
     except Exception as e:
-        capture_message("error",f"Ошибка получения событий: {e}")
+        capture_message("error", f"Ошибка получения событий: {e}")
         return make_response(False, message=str(e), status_code=500)
 
 
 if __name__ == "__main__":
     capture_message("info", "PACS API starting...", force_sentry=True)
-    
+
     if SAVE_PHOTOS:
         try:
             os.makedirs(PHOTOS_PATH, exist_ok=True)
         except Exception as e:
-            capture_message("warning",f"Ошибка создания папки: {e}")
-    
+            capture_message("warning", f"Ошибка создания папки: {e}")
+
     capture_message("info", f"PACS API started on port {API_PORT}", force_sentry=True)
     app.run(host="0.0.0.0", port=API_PORT, debug=DEBUG_MODE)
