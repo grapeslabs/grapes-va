@@ -53,6 +53,33 @@ except Exception as e:
     capture_message("error", f"Failed to connect to database: {e}")
     raise SystemExit(1)
 
+
+# ===== Применение миграций структуры БД ===== k3
+migrations_file = os.path.join(os.path.dirname(__file__), "libs", "update_schema.py")
+if os.path.isfile(migrations_file):
+    try:
+        from libs.update_schema import apply_migrations
+        apply_migrations(fr_db, MODE, capture_message)
+    except ImportError as e:
+        capture_message("error", f"Не удалось импортировать apply_migrations: {e}")
+    except Exception as e:
+        capture_message("error", f"Ошибка при применении миграций: {e}")
+else:
+    #capture_message("debug", "Файл миграций отсутствует (возможно, уже применён)")
+    pass
+# ===== Конец блока миграций ===== k3
+
+
+if MODE == "pin":
+    try:
+        from libs.FrFile import FrFile
+        fr_fl = FrFile()
+        capture_message("info", "Camera files manager established")
+    except Exception as e:
+        capture_message("error", f"Failed camera files manager: {e}")
+        raise SystemExit(1)
+
+
 app = Flask(__name__)
 CORS(app)
 
@@ -72,10 +99,20 @@ def generate_short_id() -> str:
     return str(uuid.uuid4())[24:]
 
 
+
+
+@app.errorhandler(404)
+def abort_404(e):
+    """Обработчик для 404 ошибок."""
+    capture_message("info", f"Use 404 page {str(e)}")
+    return make_response(False, message="Use 404 page", status_code=404)
+
+
 # Проверка работоспособности api
 
-@app.route("/api/c1/test", methods=["POST"])
-@app.route("/api/v1/test", methods=["POST"])
+@app.route("/api/c1/test", methods=['POST','GET'])
+@app.route("/api/v1/test", methods=['POST','GET'])
+@app.route('/api/v1/person/test', methods=['POST','GET'])
 def api_test():
     return jsonify({"ok": True})
 
@@ -86,43 +123,88 @@ def create_camera():
     if not data:
         return make_response(False, message="Invalid JSON", status_code=400)
 
-    stream_to_parse = data.get("stream_to_parse")
-    user_id = data.get("user_id", "1")
+    # === Секция stream_info ===
+    stream_info = data.get("stream_info", {})
+    stream_to_parse = stream_info.get("url")
+    if not stream_to_parse:
+        stream_to_parse = data.get("stream_to_parse")
+
+    cam_id = stream_info.get("id") or data.get("cam_id", generate_short_id())
+    name = stream_info.get("name") or data.get("name", stream_info.get("description", cam_id))
+
+    # === Секция user_info ===
+    user_info = data.get("user_info", {})
+    user_id = user_info.get("id") or data.get("user_id", "1")
+    user_mail = user_info.get("mail")
+
     if not stream_to_parse or not user_id:
         return make_response(
             False,
-            message="Обязательные поля: stream_to_parse, user_id",
+            message="Обязательные поля: stream_info.url, user_info.id",
             status_code=400,
         )
 
-    cam_id = data.get("cam_id", generate_short_id())
-    name = data.get("name", data.get("description", cam_id))
+    # === Секция detection_face ===
+    detection_face = data.get("detection_face", {})
+    face_width_min = detection_face.get("min_width_photo", MIN_WIDTH_PHOTO)
+    face_width_max = detection_face.get("face_width_max", 45)
+    timedelay = detection_face.get("timedelay", stream_info.get("timedelay", 333))
+    resize = detection_face.get("resize") or stream_info.get("resize")
+    detection_zone = detection_face.get("zone")
+    is_detection = detection_face.get("is_detection", True)
+    is_recognize = detection_face.get("is_recognize", True)
+    moving_duration_after = detection_face.get("moving_duration_after", 4)
+    cache_face_time = detection_face.get("cache_face_time", 30)
+    cache_face_max = detection_face.get("cache_face_max", 20)
+    threshold = detection_face.get("threshold", MOTION_THRESHOLD)
+    min_area = detection_face.get("min_area", MOTION_MIN_AREA)
+
+    # === Секция detection_figure ===
+    detection_figure = data.get("detection_figure", {})
+    detection_figure_active = detection_figure.get("is_active", False)
+    detection_figure_direction = detection_figure.get("direction", "LRBTA")
+    detection_figure_zones = detection_figure.get("zones", [])
+
+    # === Секция debug ===
+    debug_info = data.get("debug", {})
+    write_thumbnails = debug_info.get("write_thumbnails", False)
+    write_frame = debug_info.get("write_frame", False)
+    write_rabbit = debug_info.get("write_rabbit", False)
 
     camera_data = {
         "cam_id": cam_id,
         "name": name,
-        "desc": data.get("description", name),
+        "desc": stream_info.get("description", name),
         "stream_to_parse": stream_to_parse,
         "user_id": user_id,
-        "face_width_min": data.get("face_width_min", MIN_WIDTH_PHOTO),
-        "timedelay": data.get("timedelay", 333),
-        "resize": data.get("resize"),
-        "crop_params": data.get("crop_params"),
+        "user_mail": user_mail,
+        "face_width_min": face_width_min,
+        "face_width_max": face_width_max,
+        "timedelay": timedelay,
+        "resize": resize,
+        "crop_params": detection_zone,
         "extraqueue": data.get("extraqueue", 1),
         "status": "active",
-        "motion_min_area": data.get("motion_min_area", MOTION_MIN_AREA),
-        "motion_threshold": data.get("motion_threshold", MOTION_THRESHOLD),
-        "motion_record_after_time": data.get(
-            "motion_record_after_time", MOTION_RECORD_AFTER_TIME
-        ),
+        "motion_min_area": min_area,
+        "motion_threshold": threshold,
+        "motion_record_after_time": moving_duration_after,
+        "is_detection": is_detection,
+        "is_recognize": is_recognize,
+        "cache_face_time": cache_face_time,
+        "cache_face_max": cache_face_max,
+        "detection_figure_active": detection_figure_active,
+        "detection_figure_direction": detection_figure_direction,
+        "detection_figure_zones": detection_figure_zones,
+        "write_thumbnails": write_thumbnails,
+        "write_frame": write_frame,
+        "write_rabbit": write_rabbit,
     }
 
     # Сохраняем в БД
     if MODE == "pacs":
         fr_db.add_camera(camera_data)
-    if MODE == "pin":
-        # добавление камеры через сервер пин
-        pass
+    elif MODE == "pin":
+        fr_fl.add_camera(camera_data)
 
     capture_message("info", f"Camera {cam_id} created/updated in DB")
 
@@ -140,9 +222,10 @@ def list_cameras():
     if MODE == "pacs":
         # Получаем камеры из БД
         cameras = fr_db.get_all_cameras(user_id_filter)
-    if MODE == "pin":
+    elif MODE == "pin":
         # получение камер через сервер пин
-        pass
+        cameras = fr_fl.get_all_cameras(user_id_filter)
+
 
     tasks = {"queue": {}, "suspended": {}}
     for cam in cameras:
@@ -165,7 +248,7 @@ def suspend_camera():
     if not cam_id:
         return make_response(False, message="cam_id required", status_code=400)
 
-    if MODE == "pasc":
+    if MODE == "pacs":
         # Помечаем камеру как suspended в БД
         if fr_db.suspend_camera(cam_id):
             capture_message("info", f"Camera {cam_id} suspended")
@@ -173,22 +256,30 @@ def suspend_camera():
                 True,
                 {"status": "success", "filename": f"{cam_id}.json", "cam_id": cam_id},
             )
-    if MODE == "pin":
+    elif MODE == "pin":
         # удаление камеры через сервер пин
-        pass
-
+        if fr_fl.suspend_camera(cam_id):
+            capture_message("info", f"Camera {cam_id} suspended")
+            return make_response(
+                True,
+                {"status": "success", "filename": f"{cam_id}.json", "cam_id": cam_id},
+            )
     else:
         return make_response(
             False, message=f"Задание с cam_id '{cam_id}' не найдено", status_code=404
         )
-
 
 @app.route("/api/v1/person/add", methods=["POST"])
 def add_person():
     user_id = request.form.get("user_id")
     desc = request.form.get("desc", "")
     photo_files = request.files.getlist("photos")
-    person_id = request.form.get("person_id", generate_short_id())
+
+    #person_id = request.form.get("person_id", generate_short_id())
+    person_id = request.form.get("person_id")          # может быть None
+    is_external_person_id = person_id is not None      # запоминаем, был ли передан
+    if not is_external_person_id: person_id = generate_short_id()
+
 
     capture_message(
         "info",
@@ -362,6 +453,17 @@ def add_person():
                     f"Фото сохранено: person_id={person_id}, photo_id={photo_id}, файл={filename}",
                 )
 
+        # ===== НОВЫЙ БЛОК: обновление unknown, если person_id передан извне =====
+        if is_external_person_id:
+            cursor.execute(
+                "UPDATE unknown SET view_percone = false WHERE uuid = %s AND view_percone = true",
+                (person_id,)
+            )
+            if cursor.rowcount:
+                capture_message("info", f"Unknown record {person_id} marked as converted")
+        # ===== КОНЕЦ НОВОГО БЛОКА =====
+
+
         if not is_update and not photo_ids:
             return make_response(
                 False, message="No valid faces in photos", status_code=400
@@ -523,6 +625,9 @@ def delete_photo():
 
 @app.route("/api/events", methods=["GET"])
 def get_events():
+    if MODE != "pacs":
+        return make_response(False, message=f"Not using endpoints in mode {MODE}" , status_code=404)
+
     limit = request.args.get("limit", default=100, type=int)
     offset = request.args.get("offset", default=0, type=int)
     camera_id = request.args.get("camera_id")
@@ -554,7 +659,7 @@ def get_events():
 
 
 if __name__ == "__main__":
-    capture_message("info", "PACS API starting...", force_sentry=True)
+    capture_message("info", F"{MODE} API starting...", force_sentry=True)
 
     if SAVE_PHOTOS:
         try:
@@ -562,5 +667,5 @@ if __name__ == "__main__":
         except Exception as e:
             capture_message("warning", f"Ошибка создания папки: {e}")
 
-    capture_message("info", f"PACS API started on port {API_PORT}", force_sentry=True)
+    capture_message("info", f"{MODE} API started on port {API_PORT}", force_sentry=True)
     app.run(host="0.0.0.0", port=API_PORT, debug=DEBUG_MODE)

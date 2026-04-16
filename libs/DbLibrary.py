@@ -325,17 +325,22 @@ class FRDatabase:
         """Добавляет или обновляет камеру в БД"""
         query = """
             INSERT INTO cameras (
-                cam_id, name, description, stream_to_parse, user_id, face_width_max,
-                timedelay, resize, crop_params, extraqueue, status,
-                motion_min_area, motion_threshold, motion_record_after_time,
+                cam_id, name, description, stream_to_parse, user_id, user_mail,
+                face_width_min, face_width_max, timedelay, resize, crop_params,
+                extraqueue, status, motion_min_area, motion_threshold, motion_record_after_time,
+                is_detection, is_recognize, cache_face_time, cache_face_max,
+                detection_figure_active, detection_figure_direction, detection_figure_zones,
+                write_thumbnails, write_frame, write_rabbit,
                 created_at, updated_at
             ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, NOW(), NOW()
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, NOW(), NOW()
             ) ON CONFLICT (cam_id) DO UPDATE SET
                 name = EXCLUDED.name,
                 description = EXCLUDED.description,
                 stream_to_parse = EXCLUDED.stream_to_parse,
                 user_id = EXCLUDED.user_id,
+                user_mail = EXCLUDED.user_mail,
+                face_width_min = EXCLUDED.face_width_min,
                 face_width_max = EXCLUDED.face_width_max,
                 timedelay = EXCLUDED.timedelay,
                 resize = EXCLUDED.resize,
@@ -345,6 +350,16 @@ class FRDatabase:
                 motion_min_area = EXCLUDED.motion_min_area,
                 motion_threshold = EXCLUDED.motion_threshold,
                 motion_record_after_time = EXCLUDED.motion_record_after_time,
+                is_detection = EXCLUDED.is_detection,
+                is_recognize = EXCLUDED.is_recognize,
+                cache_face_time = EXCLUDED.cache_face_time,
+                cache_face_max = EXCLUDED.cache_face_max,
+                detection_figure_active = EXCLUDED.detection_figure_active,
+                detection_figure_direction = EXCLUDED.detection_figure_direction,
+                detection_figure_zones = EXCLUDED.detection_figure_zones,
+                write_thumbnails = EXCLUDED.write_thumbnails,
+                write_frame = EXCLUDED.write_frame,
+                write_rabbit = EXCLUDED.write_rabbit,
                 updated_at = NOW()
         """
 
@@ -354,7 +369,9 @@ class FRDatabase:
             camera_data.get("description", camera_data["name"]),
             camera_data["stream_to_parse"],
             camera_data["user_id"],
-            camera_data.get("face_width_max", 50),
+            camera_data.get("user_mail"),
+            camera_data.get("face_width_min", 50),
+            camera_data.get("face_width_max", 45),
             camera_data.get("timedelay", 333),
             camera_data.get("resize"),
             (
@@ -367,6 +384,20 @@ class FRDatabase:
             camera_data.get("motion_min_area", 500),
             camera_data.get("motion_threshold", 25),
             camera_data.get("motion_record_after_time", 3),
+            camera_data.get("is_detection", True),
+            camera_data.get("is_recognize", True),
+            camera_data.get("cache_face_time", 30),
+            camera_data.get("cache_face_max", 20),
+            camera_data.get("detection_figure_active", False),
+            camera_data.get("detection_figure_direction", "LRBTA"),
+            (
+                json.dumps(camera_data.get("detection_figure_zones"))
+                if camera_data.get("detection_figure_zones")
+                else None
+            ),
+            camera_data.get("write_thumbnails", False),
+            camera_data.get("write_frame", False),
+            camera_data.get("write_rabbit", False),
         )
 
         try:
@@ -620,7 +651,16 @@ class FRDatabase:
             # Убираем None значения
             data_json = {k: v for k, v in data_json.items() if v is not None}
 
-            person_photobank_id = event_data.get("person_id") or ""
+            # Для неизвестных лиц используем unknown_uuid
+            if event_data.get("is_unknown") and event_data.get("unknown_uuid"):
+                person_photobank_id = event_data.get("unknown_uuid")
+            # Для известных лиц используем person_id, если есть
+            elif event_data.get("person_id"):
+                person_photobank_id = event_data.get("person_id")
+            # Если ни того, ни другого нет - генерируем UUID (крайний случай)
+            else:
+                person_photobank_id = str(uuid.uuid4())
+
             is_unknown = event_data.get("is_unknown", person_photobank_id == "")
 
             with self._get_cursor() as cursor:

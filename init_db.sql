@@ -25,10 +25,12 @@ ALTER TABLE public.percone OWNER TO postgres;
 CREATE TABLE IF NOT EXISTS public.cameras (
     cam_id VARCHAR(255) PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
-    description TEXT,  -- должно быть description, не desc
+    description TEXT,
     stream_to_parse TEXT NOT NULL,
     user_id VARCHAR(255) NOT NULL,
-    face_width_max INTEGER DEFAULT 50,
+    user_mail VARCHAR(255),
+    face_width_min INTEGER DEFAULT 50,
+    face_width_max INTEGER DEFAULT 45,
     timedelay INTEGER DEFAULT 333,
     resize FLOAT,
     crop_params JSONB,
@@ -37,9 +39,23 @@ CREATE TABLE IF NOT EXISTS public.cameras (
     motion_min_area INTEGER DEFAULT 500,
     motion_threshold INTEGER DEFAULT 25,
     motion_record_after_time INTEGER DEFAULT 3,
+    is_detection BOOLEAN DEFAULT true,
+    is_recognize BOOLEAN DEFAULT true,
+    cache_face_time INTEGER DEFAULT 30,
+    cache_face_max INTEGER DEFAULT 20,
+    detection_figure_active BOOLEAN DEFAULT false,
+    detection_figure_direction VARCHAR(50) DEFAULT 'LRBTA',
+    detection_figure_zones JSONB,
+    write_thumbnails BOOLEAN DEFAULT false,
+    write_frame BOOLEAN DEFAULT false,
+    write_rabbit BOOLEAN DEFAULT false,
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
+
+-- Индексы для таблицы камер
+CREATE INDEX IF NOT EXISTS cameras_user_id_idx ON public.cameras USING btree (user_id);
+CREATE INDEX IF NOT EXISTS cameras_status_idx ON public.cameras USING btree (status);
 
 -- ========== Таблица фотографий ==========
 CREATE TABLE IF NOT EXISTS public.photo (
@@ -76,7 +92,8 @@ CREATE TABLE IF NOT EXISTS public.unknown (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
     last_response_at TIMESTAMP WITH TIME ZONE,
     response_count INTEGER DEFAULT 0,
-    CONSTRAINT unknown_pkey PRIMARY KEY(id)
+    CONSTRAINT unknown_pkey PRIMARY KEY(id),
+    view_percone BOOLEAN DEFAULT true
 );
 
 CREATE INDEX IF NOT EXISTS embedding_hnsw_idx ON public.unknown USING hnsw (embedding vector_l2_ops);
@@ -101,6 +118,7 @@ CREATE TABLE IF NOT EXISTS public.analytics_events (
 CREATE INDEX IF NOT EXISTS analytics_events_datetime_idx ON public.analytics_events(datetime);
 CREATE INDEX IF NOT EXISTS analytics_events_camera_id_idx ON public.analytics_events(camera_id);
 CREATE INDEX IF NOT EXISTS analytics_events_event_id_idx ON public.analytics_events(event_id);
+CREATE INDEX IF NOT EXISTS analytics_events_person_photobank_id_idx ON analytics_events(person_photobank_id);
 
 ALTER TABLE public.analytics_events OWNER TO postgres;
 
