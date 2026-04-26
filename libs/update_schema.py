@@ -17,6 +17,119 @@ from typing import List, Tuple, Callable, Optional
 # mode: '' — для всех режимов, 'pacs' — только для pacs, 'pin' — только для pin
 
 migrations: List[Tuple[str, str, str]] = [
+    # Миграции для timestamps с DEFAULT
+    (
+        "ALTER TABLE cameras ALTER COLUMN created_at SET DEFAULT NOW();",
+        'pacs',
+        "Установка DEFAULT NOW() для колонки created_at в таблице cameras."
+    ),
+    (
+        "ALTER TABLE cameras ALTER COLUMN updated_at SET DEFAULT NOW();",
+        'pacs',
+        "Установка DEFAULT NOW() для колонки updated_at в таблице cameras."
+    ),
+    # Миграции для новых параметров камеры (новый формат JSON)
+    (
+        "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS user_mail VARCHAR(255);",
+        'pacs',
+        "Добавление колонки user_mail в таблицу cameras."
+    ),
+    (
+        "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS face_width_min INTEGER DEFAULT 50;",
+        'pacs',
+        "Добавление колонки face_width_min в таблицу cameras."
+    ),
+    (
+        "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS face_width_max INTEGER DEFAULT 45;",
+        'pacs',
+        "Добавление колонки face_width_max в таблицу cameras."
+    ),
+    (
+        "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS timedelay INTEGER DEFAULT 333;",
+        'pacs',
+        "Добавление колонки timedelay в таблицу cameras."
+    ),
+    (
+        "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS resize FLOAT;",
+        'pacs',
+        "Добавление колонки resize в таблицу cameras."
+    ),
+    (
+        "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS crop_params JSONB;",
+        'pacs',
+        "Добавление колонки crop_params в таблицу cameras."
+    ),
+    (
+        "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS extraqueue INTEGER DEFAULT 1;",
+        'pacs',
+        "Добавление колонки extraqueue в таблицу cameras."
+    ),
+    (
+        "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'active';",
+        'pacs',
+        "Добавление колонки status в таблицу cameras."
+    ),
+    (
+        "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS motion_min_area INTEGER DEFAULT 500;",
+        'pacs',
+        "Добавление колонки motion_min_area в таблицу cameras."
+    ),
+    (
+        "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS motion_threshold INTEGER DEFAULT 25;",
+        'pacs',
+        "Добавление колонки motion_threshold в таблицу cameras."
+    ),
+    (
+        "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS motion_record_after_time INTEGER DEFAULT 3;",
+        'pacs',
+        "Добавление колонки motion_record_after_time в таблицу cameras."
+    ),
+    (
+        "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS is_detection BOOLEAN DEFAULT true;",
+        'pacs',
+        "Добавление колонки is_detection в таблицу cameras."
+    ),
+    (
+        "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS is_recognize BOOLEAN DEFAULT true;",
+        'pacs',
+        "Добавление колонки is_recognize в таблицу cameras."
+    ),
+    (
+        "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS cache_face_time INTEGER DEFAULT 30;",
+        'pacs',
+        "Добавление колонки cache_face_time в таблицу cameras."
+    ),
+    (
+        "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS cache_face_max INTEGER DEFAULT 20;",
+        'pacs',
+        "Добавление колонки cache_face_max в таблицу cameras."
+    ),
+    (
+        "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS detection_figure_active BOOLEAN DEFAULT false;",
+        'pacs',
+        "Добавление колонки detection_figure_active в таблицу cameras."
+    ),
+    (
+        "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS detection_figure_direction VARCHAR(50) DEFAULT 'LRBTA';",
+        'pacs',
+        "Добавление колонки detection_figure_direction в таблицу cameras."
+    ),
+    (
+        "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS detection_figure_zones JSONB;",
+        'pacs',
+        "Добавление колонки detection_figure_zones в таблицу cameras."
+    ),
+    (
+        "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS write_thumbnails BOOLEAN DEFAULT false;",
+        'pacs',
+        "Добавление колонки write_thumbnails в таблицу cameras."
+    ),
+    (
+        "ALTER TABLE cameras ADD COLUMN IF NOT EXISTS write_frame BOOLEAN DEFAULT false;",
+        'pacs',
+        "Добавление колонки write_frame в таблицу cameras."
+    ),
+    
     (
         "ALTER TABLE unknown ADD COLUMN IF NOT EXISTS view_percone BOOLEAN DEFAULT true;",
         '',

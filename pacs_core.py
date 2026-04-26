@@ -26,6 +26,7 @@ import atexit
 
 load_dotenv()
 
+
 try:
     pFace = PinFace(ffmode="mtcnn", frmode="adaface", fmode=['sface'])
     capture_message("info", "PinFace initialized successfully")
@@ -47,6 +48,7 @@ except Exception as e:
     raise SystemExit(1)
 
 DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true"
+MODE = os.getenv("MODE", "pacs")
 MIN_WIDTH_PHOTO = int(os.getenv("MIN_WIDTH_PHOTO", "50"))
 EUCLIDEAN_THRESHOLD = float(os.getenv("EUCLIDEAN_THRESHOLD", "0.6"))
 MAX_FACES_IN_LIST = int(os.getenv("MAX_FACES_IN_LIST", "25"))
@@ -55,6 +57,20 @@ PACS_API_URL = os.getenv("PACS_API_URL", "http://localhost:5000")
 CAMERA_POLL_INTERVAL = int(os.getenv("CAMERA_POLL_INTERVAL", "5"))
 
 os.makedirs(THUMBNAIL_PATH, exist_ok=True)
+
+migrations_file = os.path.join(os.path.dirname(__file__), "libs", "update_schema.py")
+
+if os.path.isfile(migrations_file):
+    try:
+        from libs.update_schema import apply_migrations
+        apply_migrations(db, MODE, capture_message)
+    except ImportError as e:
+        capture_message("error", f"Не удалось импортировать apply_migrations: {e}")
+    except Exception as e:
+        capture_message("error", f"Ошибка при применении миграций: {e}")
+else:
+    #capture_message("debug", "Файл миграций отсутствует (возможно, уже применён)")
+    pass
 
 cameras = {}
 cameras_lock = threading.Lock()

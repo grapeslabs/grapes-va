@@ -330,10 +330,9 @@ class FRDatabase:
                 extraqueue, status, motion_min_area, motion_threshold, motion_record_after_time,
                 is_detection, is_recognize, cache_face_time, cache_face_max,
                 detection_figure_active, detection_figure_direction, detection_figure_zones,
-                write_thumbnails, write_frame, write_rabbit,
-                created_at, updated_at
+                write_thumbnails, write_frame
             ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, NOW(), NOW()
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s
             ) ON CONFLICT (cam_id) DO UPDATE SET
                 name = EXCLUDED.name,
                 description = EXCLUDED.description,
@@ -359,7 +358,7 @@ class FRDatabase:
                 detection_figure_zones = EXCLUDED.detection_figure_zones,
                 write_thumbnails = EXCLUDED.write_thumbnails,
                 write_frame = EXCLUDED.write_frame,
-                write_rabbit = EXCLUDED.write_rabbit,
+                created_at = cameras.created_at,
                 updated_at = NOW()
         """
 
@@ -397,7 +396,6 @@ class FRDatabase:
             ),
             camera_data.get("write_thumbnails", False),
             camera_data.get("write_frame", False),
-            camera_data.get("write_rabbit", False),
         )
 
         try:

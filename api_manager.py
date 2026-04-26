@@ -6,7 +6,6 @@ pacs_api.py
 
 import os
 import uuid
-import logging
 from datetime import datetime
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -19,6 +18,7 @@ from dotenv import load_dotenv
 from libs.pinfacekirjasto.PinFace import PinFace
 from libs.DbLibrary import FRDatabase
 from libs.loglib import capture_message, shutdown
+from psycopg2.extras import RealDictCursor
 import atexit
 
 load_dotenv()
@@ -59,13 +59,14 @@ migrations_file = os.path.join(os.path.dirname(__file__), "libs", "update_schema
 if os.path.isfile(migrations_file):
     try:
         from libs.update_schema import apply_migrations
+
         apply_migrations(fr_db, MODE, capture_message)
     except ImportError as e:
         capture_message("error", f"Не удалось импортировать apply_migrations: {e}")
     except Exception as e:
         capture_message("error", f"Ошибка при применении миграций: {e}")
 else:
-    #capture_message("debug", "Файл миграций отсутствует (возможно, уже применён)")
+    # capture_message("debug", "Файл миграций отсутствует (возможно, уже применён)")
     pass
 # ===== Конец блока миграций ===== k3
 
@@ -73,6 +74,7 @@ else:
 if MODE == "pin":
     try:
         from libs.FrFile import FrFile
+
         fr_fl = FrFile()
         capture_message("info", "Camera files manager established")
     except Exception as e:
@@ -99,8 +101,6 @@ def generate_short_id() -> str:
     return str(uuid.uuid4())[24:]
 
 
-
-
 @app.errorhandler(404)
 def abort_404(e):
     """Обработчик для 404 ошибок."""
@@ -110,14 +110,16 @@ def abort_404(e):
 
 # Проверка работоспособности api
 
-@app.route("/api/c1/test", methods=['POST','GET'])
-@app.route("/api/v1/test", methods=['POST','GET'])
-@app.route('/api/v1/person/test', methods=['POST','GET'])
+
+@app.route("/api/c1/test", methods=["POST", "GET"])
+@app.route("/api/v1/test", methods=["POST", "GET"])
+@app.route("/api/v1/person/test", methods=["POST", "GET"])
 def api_test():
     return jsonify({"ok": True})
 
 
 @app.route("/api/c1/create", methods=["POST"])
+@app.route("/api/v1/camera/create", methods=["POST"])
 def create_camera():
     data = request.get_json(silent=True)
     if not data:
@@ -130,7 +132,9 @@ def create_camera():
         stream_to_parse = data.get("stream_to_parse")
 
     cam_id = stream_info.get("id") or data.get("cam_id", generate_short_id())
-    name = stream_info.get("name") or data.get("name", stream_info.get("description", cam_id))
+    name = stream_info.get("name") or data.get(
+        "name", stream_info.get("description", cam_id)
+    )
 
     # === Секция user_info ===
     user_info = data.get("user_info", {})
@@ -169,7 +173,6 @@ def create_camera():
     debug_info = data.get("debug", {})
     write_thumbnails = debug_info.get("write_thumbnails", False)
     write_frame = debug_info.get("write_frame", False)
-    write_rabbit = debug_info.get("write_rabbit", False)
 
     camera_data = {
         "cam_id": cam_id,
@@ -197,7 +200,6 @@ def create_camera():
         "detection_figure_zones": detection_figure_zones,
         "write_thumbnails": write_thumbnails,
         "write_frame": write_frame,
-        "write_rabbit": write_rabbit,
     }
 
     # Сохраняем в БД
@@ -216,6 +218,7 @@ def create_camera():
 
 
 @app.route("/api/c1/list", methods=["GET"])
+@app.route("/api/v1/camera/list", methods=["GET"])
 def list_cameras():
     user_id_filter = request.args.get("user_id")
 
@@ -225,7 +228,6 @@ def list_cameras():
     elif MODE == "pin":
         # получение камер через сервер пин
         cameras = fr_fl.get_all_cameras(user_id_filter)
-
 
     tasks = {"queue": {}, "suspended": {}}
     for cam in cameras:
@@ -239,6 +241,7 @@ def list_cameras():
 
 
 @app.route("/api/c1/suspend", methods=["POST"])
+@app.route("/api/v1/camera/suspend", methods=["POST"])
 def suspend_camera():
     data = request.get_json(silent=True)
     if not data:
@@ -269,17 +272,18 @@ def suspend_camera():
             False, message=f"Задание с cam_id '{cam_id}' не найдено", status_code=404
         )
 
+
 @app.route("/api/v1/person/add", methods=["POST"])
 def add_person():
     user_id = request.form.get("user_id")
     desc = request.form.get("desc", "")
     photo_files = request.files.getlist("photos")
 
-    #person_id = request.form.get("person_id", generate_short_id())
-    person_id = request.form.get("person_id")          # может быть None
-    is_external_person_id = person_id is not None      # запоминаем, был ли передан
-    if not is_external_person_id: person_id = generate_short_id()
-
+    # person_id = request.form.get("person_id", generate_short_id())
+    person_id = request.form.get("person_id")  # может быть None
+    is_external_person_id = person_id is not None  # запоминаем, был ли передан
+    if not is_external_person_id:
+        person_id = generate_short_id()
 
     capture_message(
         "info",
@@ -428,7 +432,7 @@ def add_person():
                 cv2.imwrite(file_path, face_cv)
                 files_saved += 1
 
-                vector_full = embeddings[0].tolist()
+                vector_full = [round(float(x), 5) for x in embeddings[0]]
 
                 cursor.execute(
                     """
@@ -457,12 +461,13 @@ def add_person():
         if is_external_person_id:
             cursor.execute(
                 "UPDATE unknown SET view_percone = false WHERE uuid = %s AND view_percone = true",
-                (person_id,)
+                (person_id,),
             )
             if cursor.rowcount:
-                capture_message("info", f"Unknown record {person_id} marked as converted")
+                capture_message(
+                    "info", f"Unknown record {person_id} marked as converted"
+                )
         # ===== КОНЕЦ НОВОГО БЛОКА =====
-
 
         if not is_update and not photo_ids:
             return make_response(
@@ -626,7 +631,9 @@ def delete_photo():
 @app.route("/api/events", methods=["GET"])
 def get_events():
     if MODE != "pacs":
-        return make_response(False, message=f"Not using endpoints in mode {MODE}" , status_code=404)
+        return make_response(
+            False, message=f"Not using endpoints in mode {MODE}", status_code=404
+        )
 
     limit = request.args.get("limit", default=100, type=int)
     offset = request.args.get("offset", default=0, type=int)
@@ -659,7 +666,7 @@ def get_events():
 
 
 if __name__ == "__main__":
-    capture_message("info", F"{MODE} API starting...", force_sentry=True)
+    capture_message("info", f"{MODE} API starting...", force_sentry=True)
 
     if SAVE_PHOTOS:
         try:

@@ -17,6 +17,7 @@ events/
 logs/
 
 # Временные файлы
+*.bak
 *.tmp
 *.swp
 *.swo

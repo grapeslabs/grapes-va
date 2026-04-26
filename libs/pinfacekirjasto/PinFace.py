@@ -121,7 +121,7 @@ class PinFace:
                 # - bboxes: координаты ограничивающего прямоугольника (0, 0, 112, 112)
                 # - faces: список с одним изображением (исходный кадр)
                 # - facescv: пустой список (так как кадр уже в формате PIL.Image)
-                return [0, 0, 112, 112], [frame], []
+                return [[0, 0, 112, 112]], [frame], []
 
         # Проверяем, является ли входной кадр объектом numpy.ndarray (формат OpenCV)
         if isinstance(frame, np.ndarray):
@@ -135,7 +135,7 @@ class PinFace:
                 # - bboxes: координаты ограничивающего прямоугольника (0, 0, 112, 112)
                 # - faces: список с одним изображением (кадр в формате PIL.Image)
                 # - facescv: список с одним изображением (исходный кадр в формате OpenCV)
-                return [0, 0, 112, 112], [Image.fromarray(frame_rgb)], [frame]
+                return [[0, 0, 112, 112]], [Image.fromarray(frame_rgb)], [frame]
 
         if not ffmode:
             return [], [], []  # Возвращаем результаты

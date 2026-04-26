@@ -48,7 +48,6 @@ CREATE TABLE IF NOT EXISTS public.cameras (
     detection_figure_zones JSONB,
     write_thumbnails BOOLEAN DEFAULT false,
     write_frame BOOLEAN DEFAULT false,
-    write_rabbit BOOLEAN DEFAULT false,
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
