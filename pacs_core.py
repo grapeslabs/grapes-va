@@ -56,6 +56,17 @@ THUMBNAIL_PATH = os.getenv("THUMBNAIL_PATH", "input/thumbnails/")
 PACS_API_URL = os.getenv("PACS_API_URL", "http://localhost:5000")
 CAMERA_POLL_INTERVAL = int(os.getenv("CAMERA_POLL_INTERVAL", "5"))
 
+DEFAULT_FACE_WIDTH_MAX = int(os.getenv("FACE_WIDTH_MAX", "45"))
+DEFAULT_RESIZE = os.getenv("RESIZE")
+DEFAULT_IS_DETECTION = os.getenv("IS_DETECTION", "true").lower() == "true"
+DEFAULT_IS_RECOGNIZE = os.getenv("IS_RECOGNIZE", "true").lower() == "true"
+DEFAULT_CACHE_FACE_TIME = int(os.getenv("CACHE_FACE_TIME", "30"))
+DEFAULT_CACHE_FACE_MAX = int(os.getenv("CACHE_FACE_MAX", "20"))
+DEFAULT_DETECTION_FIGURE_ACTIVE = os.getenv("DETECTION_FIGURE_ACTIVE", "false").lower() == "true"
+DEFAULT_DETECTION_FIGURE_DIRECTION = os.getenv("DETECTION_FIGURE_DIRECTION", "LRBTA")
+DEFAULT_WRITE_THUMBNAILS = os.getenv("WRITE_THUMBNAILS", "false").lower() == "true"
+DEFAULT_WRITE_FRAME = os.getenv("WRITE_FRAME", "false").lower() == "true"
+
 os.makedirs(THUMBNAIL_PATH, exist_ok=True)
 
 migrations_file = os.path.join(os.path.dirname(__file__), "libs", "update_schema.py")
@@ -90,11 +101,24 @@ def fetch_cameras_from_db():
                     "name": cam["name"],
                     "stream_to_parse": cam["stream_to_parse"],
                     "user_id": cam.get("user_id", "1"),
+                    "user_mail": cam.get("user_mail"),
                     "face_width_min": cam.get("face_width_min", MIN_WIDTH_PHOTO),
+                    "face_width_max": cam.get("face_width_max", DEFAULT_FACE_WIDTH_MAX),
                     "timedelay": cam.get("timedelay", 333),
+                    "resize": cam.get("resize", DEFAULT_RESIZE),
+                    "crop_params": cam.get("crop_params"),
                     "motion_min_area": cam.get("motion_min_area", 500),
                     "motion_threshold": cam.get("motion_threshold", 25),
                     "motion_record_after_time": cam.get("motion_record_after_time", 3),
+                    "is_detection": cam.get("is_detection", DEFAULT_IS_DETECTION),
+                    "is_recognize": cam.get("is_recognize", DEFAULT_IS_RECOGNIZE),
+                    "cache_face_time": cam.get("cache_face_time", DEFAULT_CACHE_FACE_TIME),
+                    "cache_face_max": cam.get("cache_face_max", DEFAULT_CACHE_FACE_MAX),
+                    "detection_figure_active": cam.get("detection_figure_active", DEFAULT_DETECTION_FIGURE_ACTIVE),
+                    "detection_figure_direction": cam.get("detection_figure_direction", DEFAULT_DETECTION_FIGURE_DIRECTION),
+                    "detection_figure_zones": cam.get("detection_figure_zones"),
+                    "write_thumbnails": cam.get("write_thumbnails", DEFAULT_WRITE_THUMBNAILS),
+                    "write_frame": cam.get("write_frame", DEFAULT_WRITE_FRAME),
                 }
             )
 

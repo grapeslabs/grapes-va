@@ -100,6 +100,78 @@ def make_response(
 def generate_short_id() -> str:
     return str(uuid.uuid4())[24:]
 
+def mask_rtsp_credentials(url: str) -> str:
+    """
+    Маскирует логин и пароль в RTSP URL, заменяя их на символы '#'.
+
+    Аргументы:
+        url: RTSP-адрес вида rtsp://логин:пароль@хост/путь
+
+    Возвращает:
+        Адрес с замаскированными логином и паролем.
+        При неверном формате возвращает исходную строку.
+
+    Пример:
+        >>> mask_rtsp_credentials("rtsp://admin:123456@192.168.1.64:554/ISAPI/Streaming/Channels/101")
+        'rtsp://#####:######@192.168.1.64:554/ISAPI/Streaming/Channels/101'
+    """
+    if not url:
+        return url
+    if not url.startswith("rtsp://"):
+        return url
+    at = url.find('@')
+    if at == -1:
+        return url
+    col = url.find(':', 7)
+    if col == -1 or col > at:
+        return url
+    return f"rtsp://{'#' * (col - 7)}:{'#' * (at - col - 1)}{url[at:]}"
+
+def camera_to_nested(cam: dict, mask_rtsp: bool = True) -> dict:
+    """Преобразует плоский JSON камеры во вложенный формат"""
+    data = {
+        "stream_info": {
+            "id": cam.get("cam_id"),
+            "url": cam.get("stream_to_parse", ""),
+            "name": cam.get("name"),
+            "description": cam.get("description"),
+            "timedelay": cam.get("timedelay", 333),
+            "resize": cam.get("resize"),
+        },
+        "user_info": {
+            "id": cam.get("user_id"),
+            "mail": cam.get("user_mail"),
+        },
+        "detection_face": {
+            "is_detection": cam.get("is_detection", True),
+            "is_recognize": cam.get("is_recognize", True),
+            "min_width_photo": cam.get("face_width_min", 50),
+            "face_width_max": cam.get("face_width_max", 45),
+            "min_area": cam.get("motion_min_area", 500),
+            "threshold": cam.get("motion_threshold", 25),
+            "moving_duration_after": cam.get("motion_record_after_time", 3),
+            "cache_face_time": cam.get("cache_face_time", 30),
+            "cache_face_max": cam.get("cache_face_max", 20),
+            "zone": cam.get("crop_params"),
+            "timedelay": cam.get("timedelay", 333),
+            "resize": cam.get("resize"),
+        },
+        "detection_figure": {
+            "is_active": cam.get("detection_figure_active", False),
+            "direction": cam.get("detection_figure_direction", "LRBTA"),
+            "zones": cam.get("detection_figure_zones", []),
+        },
+        "debug": {
+            "write_thumbnails": cam.get("write_thumbnails", False),
+            "write_frame": cam.get("write_frame", False),
+        },
+    }
+
+    if mask_rtsp:
+        url = data['stream_info']['stream_to_parse']
+        data['stream_info']['stream_to_parse'] = mask_rtsp_credentials(url)
+
+    return data
 
 @app.errorhandler(404)
 def abort_404(e):
@@ -223,10 +295,8 @@ def list_cameras():
     user_id_filter = request.args.get("user_id")
 
     if MODE == "pacs":
-        # Получаем камеры из БД
         cameras = fr_db.get_all_cameras(user_id_filter)
     elif MODE == "pin":
-        # получение камер через сервер пин
         cameras = fr_fl.get_all_cameras(user_id_filter)
 
     tasks = {"queue": {}, "suspended": {}}
@@ -234,7 +304,7 @@ def list_cameras():
         tasks["queue"][cam["cam_id"]] = {
             "filename": f"{cam['cam_id']}.json",
             "folder": "queue",
-            **cam,
+            **camera_to_nested(cam),
         }
 
     return make_response(True, {"tasks": tasks})

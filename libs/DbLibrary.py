@@ -421,7 +421,8 @@ class FRDatabase:
                 cursor.execute(
                     "SELECT * FROM cameras WHERE status = 'active' ORDER BY created_at"
                 )
-            return [dict(row) for row in cursor.fetchall()]
+            cameras = [dict(row) for row in cursor.fetchall()]
+            return cameras
 
     def get_camera(self, cam_id: str) -> Optional[Dict]:
         """Получает камеру по ID"""
