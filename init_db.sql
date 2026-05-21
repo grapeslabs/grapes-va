@@ -105,7 +105,7 @@ CREATE TABLE IF NOT EXISTS public.analytics_events (
     datetime TIMESTAMP NOT NULL,
     camera_id VARCHAR(255) NOT NULL,
     type VARCHAR(255) NOT NULL,
-    person_photobank_id VARCHAR(255) NOT NULL,
+    person_photobank_id VARCHAR(255),
     event_id VARCHAR(255) NOT NULL,
     created_at TIMESTAMP NOT NULL,
     data JSONB NOT NULL,

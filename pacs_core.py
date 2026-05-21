@@ -12,6 +12,8 @@ import threading
 import logging
 import uuid
 import queue
+import json
+import base64
 from datetime import datetime
 import numpy as np
 from dotenv import load_dotenv
@@ -28,7 +30,7 @@ load_dotenv()
 
 
 try:
-    pFace = PinFace(ffmode="mtcnn", frmode="adaface", fmode=['sface'])
+    pFace = PinFace(ffmode="mtcnn", frmode="adaface", fmode=["sface"])
     capture_message("info", "PinFace initialized successfully")
 except Exception as e:
     capture_message("error", f"Failed to initialize PinFace: {e}")
@@ -62,37 +64,76 @@ DEFAULT_IS_DETECTION = os.getenv("IS_DETECTION", "true").lower() == "true"
 DEFAULT_IS_RECOGNIZE = os.getenv("IS_RECOGNIZE", "true").lower() == "true"
 DEFAULT_CACHE_FACE_TIME = int(os.getenv("CACHE_FACE_TIME", "30"))
 DEFAULT_CACHE_FACE_MAX = int(os.getenv("CACHE_FACE_MAX", "20"))
-DEFAULT_DETECTION_FIGURE_ACTIVE = os.getenv("DETECTION_FIGURE_ACTIVE", "false").lower() == "true"
+DEFAULT_DETECTION_FIGURE_ACTIVE = (
+    os.getenv("DETECTION_FIGURE_ACTIVE", "false").lower() == "true"
+)
 DEFAULT_DETECTION_FIGURE_DIRECTION = os.getenv("DETECTION_FIGURE_DIRECTION", "LRBTA")
 DEFAULT_WRITE_THUMBNAILS = os.getenv("WRITE_THUMBNAILS", "false").lower() == "true"
 DEFAULT_WRITE_FRAME = os.getenv("WRITE_FRAME", "false").lower() == "true"
+TIMEDELAY = int(os.getenv("TIMEDELAY", 333))
+
+MOTION_MIN_AREA = int(os.getenv("MOTION_MIN_AREA", "500"))
+MOTION_THRESHOLD = int(os.getenv("MOTION_THRESHOLD", "25"))
+MOTION_RECORD_AFTER_TIME = int(os.getenv("MOTION_RECORD_AFTER_TIME", "3"))
 
 os.makedirs(THUMBNAIL_PATH, exist_ok=True)
 
 migrations_file = os.path.join(os.path.dirname(__file__), "libs", "update_schema.py")
 
+try:
+    # Проверяем, что выбранные режимы допустимы
+    assert MODE in ["pacs", "pin"]
+except Exception as e:
+    # Если возникла ошибка, выводим сообщение и завершаем программу
+    s = str(e).strip()  # Преобразуем исключение в строку и убираем лишние пробелы
+    capture_message(
+        "error",
+        f"Failed set MODE {e}; Имя ошибки: {e.__class__.__name__}"
+        + (f"; Сообщение об ошибке: {s}" if s else ""),
+    )
+    raise SystemExit(1)
+
+
 if os.path.isfile(migrations_file):
     try:
         from libs.update_schema import apply_migrations
+
         apply_migrations(db, MODE, capture_message)
     except ImportError as e:
         capture_message("error", f"Не удалось импортировать apply_migrations: {e}")
     except Exception as e:
         capture_message("error", f"Ошибка при применении миграций: {e}")
 else:
-    #capture_message("debug", "Файл миграций отсутствует (возможно, уже применён)")
+    capture_message("debug", "Файл миграций отсутствует (возможно, уже применён)")
     pass
 
 cameras = {}
 cameras_lock = threading.Lock()
 shared_queue = None
 
+capture_message("info", f"PACS mode = {MODE}", force_sentry=True)
+if MODE == "pacs":    
+    MODE_SUB = "pacs"
+elif MODE == "pin":
+    MODE_SUB = "detection"
+    import sys
+
+    if len(sys.argv) > 1:
+        if sys.argv[1].lower() == "--recognize":
+            MODE_SUB = "recognize"
+    capture_message("info", f"PACS mode_sub = {MODE_SUB}", force_sentry=True)
+
 
 def fetch_cameras_from_db():
     """Читает камеры напрямую из БД"""
     try:
         cameras_list = []
-        rows = db.get_all_cameras()  # используем новый метод
+
+        if MODE == "pacs":
+            rows = db.get_all_cameras()  # используем новый метод
+        elif MODE == "pin":
+            # заглушка для pin
+            pass
 
         for cam in rows:
             cameras_list.append(
@@ -104,20 +145,30 @@ def fetch_cameras_from_db():
                     "user_mail": cam.get("user_mail"),
                     "face_width_min": cam.get("face_width_min", MIN_WIDTH_PHOTO),
                     "face_width_max": cam.get("face_width_max", DEFAULT_FACE_WIDTH_MAX),
-                    "timedelay": cam.get("timedelay", 333),
+                    "timedelay": cam.get("timedelay", TIMEDELAY),
                     "resize": cam.get("resize", DEFAULT_RESIZE),
                     "crop_params": cam.get("crop_params"),
-                    "motion_min_area": cam.get("motion_min_area", 500),
-                    "motion_threshold": cam.get("motion_threshold", 25),
-                    "motion_record_after_time": cam.get("motion_record_after_time", 3),
+                    "motion_min_area": cam.get("motion_min_area", MOTION_MIN_AREA),
+                    "motion_threshold": cam.get("motion_threshold", MOTION_THRESHOLD),
+                    "motion_record_after_time": cam.get(
+                        "motion_record_after_time", MOTION_RECORD_AFTER_TIME
+                    ),
                     "is_detection": cam.get("is_detection", DEFAULT_IS_DETECTION),
                     "is_recognize": cam.get("is_recognize", DEFAULT_IS_RECOGNIZE),
-                    "cache_face_time": cam.get("cache_face_time", DEFAULT_CACHE_FACE_TIME),
+                    "cache_face_time": cam.get(
+                        "cache_face_time", DEFAULT_CACHE_FACE_TIME
+                    ),
                     "cache_face_max": cam.get("cache_face_max", DEFAULT_CACHE_FACE_MAX),
-                    "detection_figure_active": cam.get("detection_figure_active", DEFAULT_DETECTION_FIGURE_ACTIVE),
-                    "detection_figure_direction": cam.get("detection_figure_direction", DEFAULT_DETECTION_FIGURE_DIRECTION),
+                    "detection_figure_active": cam.get(
+                        "detection_figure_active", DEFAULT_DETECTION_FIGURE_ACTIVE
+                    ),
+                    "detection_figure_direction": cam.get(
+                        "detection_figure_direction", DEFAULT_DETECTION_FIGURE_DIRECTION
+                    ),
                     "detection_figure_zones": cam.get("detection_figure_zones"),
-                    "write_thumbnails": cam.get("write_thumbnails", DEFAULT_WRITE_THUMBNAILS),
+                    "write_thumbnails": cam.get(
+                        "write_thumbnails", DEFAULT_WRITE_THUMBNAILS
+                    ),
                     "write_frame": cam.get("write_frame", DEFAULT_WRITE_FRAME),
                 }
             )
@@ -141,11 +192,74 @@ def queue_worker(q, stop_event):
             timestamp_num, camera_id, camera_name, user_id, faces, face_widths, _ = data
             timestamp = datetime.fromtimestamp(timestamp_num)
 
+            # Получаем параметры камеры
+            cam_params = cameras.get(camera_id, {})
+            is_detection = cam_params.get("is_detection", DEFAULT_IS_DETECTION)
+            is_recognize = cam_params.get("is_recognize", DEFAULT_IS_RECOGNIZE)
+            detection_figure_active = cam_params.get(
+                "detection_figure_active", DEFAULT_DETECTION_FIGURE_ACTIVE
+            )
+
+            full_path = None
+
+            # detection_figure_active - отдельный блок
+            if detection_figure_active:
+                pass  # TODO: реализовать логику detection_figure
+
             for idx, face in enumerate(faces):
                 face_width = face_widths[idx]
 
+                # Если только детекция без распознавания
+                if is_detection and not is_recognize:
+                    # TODO: уточнить логику записи в неизвестные
+                    capture_message(
+                        "debug",
+                        f"Детекция лица без распознавания: камера={camera_name}",
+                    )
+
+                    face_cv = cv2.cvtColor(np.array(face), cv2.COLOR_RGB2BGR)
+                    _, face_buffer = cv2.imencode(".jpg", face_cv)
+                    face_snapshot_b64 = base64.b64encode(face_buffer.tobytes()).decode(
+                        "utf-8"
+                    )
+
+                    if DEFAULT_WRITE_THUMBNAILS:
+                        full_path = os.path.join(THUMBNAIL_PATH, filename)
+                        cv2.imwrite(full_path, face_cv)
+
+                    event_data = {
+                        "event_id": event_uuid,
+                        "datetime": timestamp,
+                        "camera_id": camera_id,
+                        "camera_name": camera_name,
+                        "person_id": None,
+                        "is_unknown": True,
+                        "unknown_uuid": None,
+                        "face_width": face_width,
+                        "snapshot_path": full_path,
+                        "user_id": user_id,
+                        "is_recognize": is_recognize,
+                        "face_snapshot_b64": face_snapshot_b64,
+                    }
+
+                    if not DEBUG_MODE:
+                        try:
+                            db.log_event(event_data=event_data)
+                            capture_message(
+                                "info",
+                                f"Ивент записан: event={event_uuid}, камера={camera_name}",
+                            )
+                        except Exception as e:
+                            capture_message(
+                                "error", f"Событие не записано. Ошибка: {e}"
+                            )
+
+                    continue
+
                 # 1. Строим короткий вектор sface (128)
-                embedding_short = pFace.face_recognition(faces=[face], frmode='sface')[0]
+                embedding_short = pFace.face_recognition(faces=[face], frmode="sface")[
+                    0
+                ]
 
                 # 2. Проверяем в FixedSizeList - новое лицо или уже было
                 face_distance_min, _, _, _ = face_short_cache.get_EVmin(embedding_short)
@@ -159,12 +273,16 @@ def queue_worker(q, stop_event):
 
                     # Сохраняем thumbnail
                     event_uuid = str(uuid.uuid4())
-                    filename = f"{event_uuid}.jpeg"
-                    full_path = os.path.join(THUMBNAIL_PATH, filename)
-                    face_cv = cv2.cvtColor(np.array(face), cv2.COLOR_RGB2BGR)
-                    cv2.imwrite(full_path, face_cv)
 
-                    dtime_str = datetime.fromtimestamp(timestamp_num).strftime("%Y%m%d-%H%M%S-%f")
+                    if DEFAULT_WRITE_THUMBNAILS:
+                        filename = f"{event_uuid}.jpeg"
+                        full_path = os.path.join(THUMBNAIL_PATH, filename)
+                        face_cv = cv2.cvtColor(np.array(face), cv2.COLOR_RGB2BGR)
+                        cv2.imwrite(full_path, face_cv)
+
+                    dtime_str = datetime.fromtimestamp(timestamp_num).strftime(
+                        "%Y%m%d-%H%M%S-%f"
+                    )
 
                     # Обработка распознавания
                     item, debug_text = db.process_face_recognition(
@@ -192,9 +310,15 @@ def queue_worker(q, stop_event):
                     # Логирование
                     percent = item["data"]["person"].get("percent")
                     if recognized:
-                        capture_message("info", f"Распознано: person_id={person_id}, камера={camera_name}, процент={percent}")
+                        capture_message(
+                            "info",
+                            f"Распознано: person_id={person_id}, камера={camera_name}, процент={percent}",
+                        )
                     else:
-                        capture_message("info", f"Неизвестное лицо: uuid={unknown_uuid}, камера={camera_name}, процент={percent}")
+                        capture_message(
+                            "info",
+                            f"Неизвестное лицо: uuid={unknown_uuid}, камера={camera_name}, процент={percent}",
+                        )
 
                     # Запись в БД
                     event_data = {
@@ -208,17 +332,25 @@ def queue_worker(q, stop_event):
                         "face_width": face_width,
                         "snapshot_path": full_path,
                         "user_id": user_id,
+                        "is_recognize": is_recognize,
                     }
 
                     if not DEBUG_MODE:
                         if db.log_event(event_data):
                             status = "распознан" if recognized else "неизвестный"
-                            capture_message("info", f"Ивент записан: event={event_uuid}, {status}, камера={camera_name}, person_id={person_id or 'N/A'}")
+                            capture_message(
+                                "info",
+                                f"Ивент записан: event={event_uuid}, {status}, камера={camera_name}, person_id={person_id or 'N/A'}",
+                            )
                         else:
-                            capture_message("error", f"Ошибка записи события {event_uuid} в БД")
+                            capture_message(
+                                "error", f"Ошибка записи события {event_uuid} в БД"
+                            )
                 else:
                     # Лицо уже было в последние 5 секунд - пропускаем
-                    capture_message("debug", f"Лицо пропущено (уже было), камера={camera_name}")
+                    capture_message(
+                        "debug", f"Лицо пропущено (уже было), камера={camera_name}"
+                    )
                     continue
 
         except queue.Empty:
@@ -241,14 +373,40 @@ class CameraProcessor(threading.Thread):
 
         self.user_id = cam_config.get("user_id", "1")
         self.face_width_min = cam_config.get("face_width_min", MIN_WIDTH_PHOTO)
-        self.timedelay = cam_config.get("timedelay", 333) / 1000.0
+        self.timedelay = cam_config.get("timedelay", TIMEDELAY) / 1000.0
         self.shared_queue = shared_queue
         self.frames_processed = 0
         self.faces_detected = 0
+
         # Параметры детектора движения
-        self.motion_min_area = cam_config.get("motion_min_area", 500)
-        self.motion_threshold = cam_config.get("motion_threshold", 25)
-        self.motion_record_after_time = cam_config.get("motion_record_after_time", 3)
+        self.motion_min_area = cam_config.get("motion_min_area", MOTION_MIN_AREA)
+        self.motion_threshold = cam_config.get("motion_threshold", MOTION_THRESHOLD)
+        self.motion_record_after_time = cam_config.get(
+            "motion_record_after_time", MOTION_RECORD_AFTER_TIME
+        )
+
+        # Дополнительные параметры камеры
+        self.user_mail = cam_config.get("user_mail")
+        self.face_width_max = cam_config.get("face_width_max", DEFAULT_FACE_WIDTH_MAX)
+        self.resize = cam_config.get("resize", DEFAULT_RESIZE)
+        self.crop_params = cam_config.get("crop_params")
+        self.is_detection = cam_config.get("is_detection", DEFAULT_IS_DETECTION)
+        self.is_recognize = cam_config.get("is_recognize", DEFAULT_IS_RECOGNIZE)
+        self.cache_face_time = cam_config.get(
+            "cache_face_time", DEFAULT_CACHE_FACE_TIME
+        )
+        self.cache_face_max = cam_config.get("cache_face_max", DEFAULT_CACHE_FACE_MAX)
+        self.detection_figure_active = cam_config.get(
+            "detection_figure_active", DEFAULT_DETECTION_FIGURE_ACTIVE
+        )
+        self.detection_figure_direction = cam_config.get(
+            "detection_figure_direction", DEFAULT_DETECTION_FIGURE_DIRECTION
+        )
+        self.detection_figure_zones = cam_config.get("detection_figure_zones")
+        self.write_thumbnails = cam_config.get(
+            "write_thumbnails", DEFAULT_WRITE_THUMBNAILS
+        )
+        self.write_frame = cam_config.get("write_frame", DEFAULT_WRITE_FRAME)
 
         self.events_dir_path = f"events/{self.cam_name}"
 
@@ -307,21 +465,27 @@ class CameraProcessor(threading.Thread):
 
                 if filtered_faces:
                     self.faces_detected += len(filtered_faces)
-                    self.shared_queue.put_nowait(
-                        (
-                            time.time(),
-                            self.camera_id,
-                            self.cam_name,
-                            self.user_id,
-                            filtered_faces,
-                            face_widths,
-                            self.config.get("stream_id", ""),
+                    if MODE == "pacs":
+                        self.shared_queue.put_nowait(
+                            (
+                                time.time(),
+                                self.camera_id,
+                                self.cam_name,
+                                self.user_id,
+                                filtered_faces,
+                                face_widths,
+                                self.config.get("stream_id", ""),
+                            )
                         )
-                    )
-                    cv2.imwrite(
-                        f"{self.events_dir_path}/{self.camera_id}_{event_timestamp}.jpg",
-                        frame,
-                    )
+                    elif MODE == "pin":
+                        # запись в очередь rabbitMQ
+                        pass
+
+                    if DEFAULT_WRITE_FRAME:
+                        cv2.imwrite(
+                            f"{self.events_dir_path}/{self.camera_id}_{event_timestamp}.jpg",
+                            frame,
+                        )
 
             elapsed = time.time() - start_time
             remaining = self.timedelay - elapsed
@@ -334,7 +498,11 @@ class CameraProcessor(threading.Thread):
 def camera_polling_thread(stop_event):
     while not stop_event.is_set():
         try:
-            new_cams = fetch_cameras_from_db()
+            if MODE == "pacs":
+                new_cams = fetch_cameras_from_db()
+            elif MODE == "pin":
+                # new_cams = fetch_cameras_from_db_file()
+                pass
             with cameras_lock:
                 current_ids = set(cameras.keys())
                 new_ids = {cam["cam_id"] for cam in new_cams}
@@ -345,9 +513,25 @@ def camera_polling_thread(stop_event):
                     cameras[cam_id].join(timeout=5)
                     del cameras[cam_id]
 
+                    if MODE == "pin":  # перенос файла в область удаленных
+                        # fetch_cameras_from_db_delete_file()
+                        pass
+
                 for cam in new_cams:
                     cam_id = cam["cam_id"]
                     if cam_id not in cameras:
+
+                        if not (
+                            cam["is_detection"]
+                            and cam["is_recognize"]
+                            and cam["detection_figure_active"]
+                        ):
+                            capture_message(
+                                "info",
+                                f"Камера {cam['name']}  не добавлена. Параметры is_detection, is_recognize, detection_figure_active отключены",
+                            )
+                            continue
+
                         capture_message("info", f"Камера {cam['name']} добавлена")
                         proc = CameraProcessor(cam, shared_queue)
                         proc.start()
@@ -376,10 +560,7 @@ def camera_polling_thread(stop_event):
         stop_event.wait(timeout=CAMERA_POLL_INTERVAL)
 
 
-def main():
-    capture_message("info", "PACS Core starting...", force_sentry=True)
-    if not os.path.exists("events"):
-        os.mkdir("events")
+def mode_pacs():
 
     global shared_queue
     shared_queue = queue.Queue(maxsize=1000)
@@ -408,11 +589,28 @@ def main():
             for proc in cameras.values():
                 proc.join(timeout=5)
 
+
         queue_thread.join()
+
         poll_thread.join()
         db.close_all_connections()
-        capture_message("info", "PACS Core stopped", force_sentry=True)
+        
+
+def mode_pin():
+    ### для пина
+    pass
 
 
 if __name__ == "__main__":
-    main()
+    capture_message("info", "PACS Core starting...", force_sentry=True)
+    
+    if not os.path.exists("events") and DEFAULT_WRITE_FRAME:
+        os.mkdir("events")
+
+    if MODE == "pacs":
+        mode_pacs()
+        
+    elif MODE == "pin":
+        mode_pin()
+        
+    capture_message("info", "PACS Core stopped", force_sentry=True)

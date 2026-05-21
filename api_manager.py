@@ -36,9 +36,20 @@ MODE = os.getenv("MODE", "pacs")
 DEBUG_MODE = str(os.getenv("DEBUG_MODE", "false")).lower() == "true"
 API_PORT = int(os.getenv("API_PORT", "5000"))
 PERSON_AVATARS_PATH = os.getenv("PERSON_AVATARS_PATH", "./person_photos")
-MIN_WIDTH_PHOTO = int(os.getenv("MIN_WIDTH_PHOTO", "50"))
+FACE_WIDTH_MIN = int(os.getenv("FACE_WIDTH_MIN", "50"))
+RESIZE = float(os.getenv("RESIZE", "1.0"))
+FACE_WIDTH_MAX = int(os.getenv("FACE_WIDTH_MAX", 45))
+IS_DETECTION = str(os.getenv("IS_DETECTION", "true")).lower() == "true"
+IS_RECOGNIZE = str(os.getenv("IS_RECOGNIZE", "true")).lower() == "true"
+CACHE_FACE_TIME = int(os.getenv("CACHE_FACE_TIME", 30))
+CACHE_FACE_MAX = int(os.getenv("CACHE_FACE_MAX", 30))
+DETECTION_FIGURE_ACTIVE = str(os.getenv("DETECTION_FIGURE_ACTIVE", "false")) == "true"
+DETECTION_FIGURE_DIRECTION = str(os.getenv("DETECTION_FIGURE_DIRECTION", "LRBTA"))
+WRITE_THUMBNAILS = str(os.getenv("WRITE_THUMBNAILS", "false")).lower() == "true"
+WRITE_FRAME = str(os.getenv("WRITE_FRAME", "false")).lower() == "true"
+TIMEDELAY = int(os.getenv("TIMEDELAY", 333))
 
-# Параметры детектора движения по умолчанию
+
 MOTION_MIN_AREA = int(os.getenv("MOTION_MIN_AREA", "500"))
 MOTION_THRESHOLD = int(os.getenv("MOTION_THRESHOLD", "25"))
 MOTION_RECORD_AFTER_TIME = int(os.getenv("MOTION_RECORD_AFTER_TIME", "3"))
@@ -100,6 +111,7 @@ def make_response(
 def generate_short_id() -> str:
     return str(uuid.uuid4())[24:]
 
+
 def mask_rtsp_credentials(url: str) -> str:
     """
     Маскирует логин и пароль в RTSP URL, заменяя их на символы '#'.
@@ -119,59 +131,62 @@ def mask_rtsp_credentials(url: str) -> str:
         return url
     if not url.startswith("rtsp://"):
         return url
-    at = url.find('@')
+    at = url.find("@")
     if at == -1:
         return url
-    col = url.find(':', 7)
+    col = url.find(":", 7)
     if col == -1 or col > at:
         return url
     return f"rtsp://{'#' * (col - 7)}:{'#' * (at - col - 1)}{url[at:]}"
 
+
 def camera_to_nested(cam: dict, mask_rtsp: bool = True) -> dict:
     """Преобразует плоский JSON камеры во вложенный формат"""
     data = {
+        "is_active": cam.get("status"),
         "stream_info": {
             "id": cam.get("cam_id"),
             "url": cam.get("stream_to_parse", ""),
             "name": cam.get("name"),
             "description": cam.get("description"),
-            "timedelay": cam.get("timedelay", 333),
-            "resize": cam.get("resize"),
+            "timedelay": cam.get("timedelay", TIMEDELAY),
+            "resize": cam.get("resize", RESIZE),
         },
         "user_info": {
             "id": cam.get("user_id"),
             "mail": cam.get("user_mail"),
         },
         "detection_face": {
-            "is_detection": cam.get("is_detection", True),
-            "is_recognize": cam.get("is_recognize", True),
-            "min_width_photo": cam.get("face_width_min", 50),
-            "face_width_max": cam.get("face_width_max", 45),
-            "min_area": cam.get("motion_min_area", 500),
-            "threshold": cam.get("motion_threshold", 25),
-            "moving_duration_after": cam.get("motion_record_after_time", 3),
-            "cache_face_time": cam.get("cache_face_time", 30),
-            "cache_face_max": cam.get("cache_face_max", 20),
+            "is_detection": cam.get("is_detection", IS_DETECTION),
+            "is_recognize": cam.get("is_recognize", IS_RECOGNIZE),
+            "face_width_min": cam.get("face_width_min", FACE_WIDTH_MIN),
+            "face_width_max": cam.get("face_width_max", FACE_WIDTH_MAX),
+            "min_area": cam.get("motion_min_area", MOTION_MIN_AREA),
+            "threshold": cam.get("motion_threshold", MOTION_THRESHOLD),
+            "moving_duration_after": cam.get("motion_record_after_time", MOTION_RECORD_AFTER_TIME),
+            "cache_face_time": cam.get("cache_face_time", CACHE_FACE_TIME),
+            "cache_face_max": cam.get("cache_face_max", CACHE_FACE_MAX),
             "zone": cam.get("crop_params"),
-            "timedelay": cam.get("timedelay", 333),
-            "resize": cam.get("resize"),
+            "timedelay": cam.get("timedelay", TIMEDELAY),
+            "resize": cam.get("resize", RESIZE),
         },
         "detection_figure": {
             "is_active": cam.get("detection_figure_active", False),
-            "direction": cam.get("detection_figure_direction", "LRBTA"),
+            "direction": cam.get("detection_figure_direction", DETECTION_FIGURE_DIRECTION),
             "zones": cam.get("detection_figure_zones", []),
         },
         "debug": {
-            "write_thumbnails": cam.get("write_thumbnails", False),
-            "write_frame": cam.get("write_frame", False),
+            "write_thumbnails": cam.get("write_thumbnails", WRITE_THUMBNAILS),
+            "write_frame": cam.get("write_frame", WRITE_FRAME),
         },
     }
 
     if mask_rtsp:
-        url = data['stream_info']['stream_to_parse']
-        data['stream_info']['stream_to_parse'] = mask_rtsp_credentials(url)
+        url = data["stream_info"]["url"]
+        data["stream_info"]["url"] = mask_rtsp_credentials(url)
 
     return data
+
 
 @app.errorhandler(404)
 def abort_404(e):
@@ -199,6 +214,7 @@ def create_camera():
 
     # === Секция stream_info ===
     stream_info = data.get("stream_info", {})
+    print(stream_info)
     stream_to_parse = stream_info.get("url")
     if not stream_to_parse:
         stream_to_parse = data.get("stream_to_parse")
@@ -222,34 +238,34 @@ def create_camera():
 
     # === Секция detection_face ===
     detection_face = data.get("detection_face", {})
-    face_width_min = detection_face.get("min_width_photo", MIN_WIDTH_PHOTO)
-    face_width_max = detection_face.get("face_width_max", 45)
-    timedelay = detection_face.get("timedelay", stream_info.get("timedelay", 333))
-    resize = detection_face.get("resize") or stream_info.get("resize")
+    face_width_min = detection_face.get("FACE_WIDTH_MIN", FACE_WIDTH_MIN)
+    face_width_max = detection_face.get("face_width_max", FACE_WIDTH_MAX)
+    timedelay = detection_face.get("timedelay", TIMEDELAY) or stream_info.get("timedelay", TIMEDELAY)
+    resize = detection_face.get("resize", RESIZE) or stream_info.get("resize", RESIZE)
     detection_zone = detection_face.get("zone")
-    is_detection = detection_face.get("is_detection", True)
-    is_recognize = detection_face.get("is_recognize", True)
-    moving_duration_after = detection_face.get("moving_duration_after", 4)
-    cache_face_time = detection_face.get("cache_face_time", 30)
-    cache_face_max = detection_face.get("cache_face_max", 20)
-    threshold = detection_face.get("threshold", MOTION_THRESHOLD)
+    is_detection = bool(detection_face.get("is_detection", IS_DETECTION))
+    is_recognize = bool(detection_face.get("is_recognize", IS_RECOGNIZE))
+    moving_duration_after = detection_face.get("moving_duration_after", MOTION_RECORD_AFTER_TIME)
+    cache_face_time = detection_face.get("cache_face_time", CACHE_FACE_TIME)
+    cache_face_max = detection_face.get("cache_face_max", CACHE_FACE_MAX)
+    threshold = float(detection_face.get("threshold", MOTION_THRESHOLD))
     min_area = detection_face.get("min_area", MOTION_MIN_AREA)
 
     # === Секция detection_figure ===
     detection_figure = data.get("detection_figure", {})
-    detection_figure_active = detection_figure.get("is_active", False)
-    detection_figure_direction = detection_figure.get("direction", "LRBTA")
+    detection_figure_active = bool(detection_figure.get("is_active", DETECTION_FIGURE_ACTIVE))
+    detection_figure_direction = detection_figure.get("direction", DETECTION_FIGURE_DIRECTION)
     detection_figure_zones = detection_figure.get("zones", [])
 
     # === Секция debug ===
     debug_info = data.get("debug", {})
-    write_thumbnails = debug_info.get("write_thumbnails", False)
-    write_frame = debug_info.get("write_frame", False)
+    write_thumbnails = bool(debug_info.get("write_thumbnails", WRITE_THUMBNAILS))
+    write_frame = bool(debug_info.get("write_frame", WRITE_THUMBNAILS))
 
     camera_data = {
         "cam_id": cam_id,
         "name": name,
-        "desc": stream_info.get("description", name),
+        "description": stream_info.get("description", name),
         "stream_to_parse": stream_to_parse,
         "user_id": user_id,
         "user_mail": user_mail,
@@ -284,7 +300,7 @@ def create_camera():
 
     return make_response(
         True,
-        {"status": "success", "filename": f"{cam_id}.json", "data": camera_data},
+        {"status": "success", "data": camera_data},
         status_code=201,
     )
 
@@ -299,15 +315,13 @@ def list_cameras():
     elif MODE == "pin":
         cameras = fr_fl.get_all_cameras(user_id_filter)
 
-    tasks = {"queue": {}, "suspended": {}}
+    tasks = {}
     for cam in cameras:
-        tasks["queue"][cam["cam_id"]] = {
-            "filename": f"{cam['cam_id']}.json",
-            "folder": "queue",
+        tasks[cam["cam_id"]] = {
             **camera_to_nested(cam),
         }
 
-    return make_response(True, {"tasks": tasks})
+    return make_response(True, tasks)
 
 
 @app.route("/api/c1/suspend", methods=["POST"])
@@ -447,7 +461,7 @@ def add_person():
                     if not faces:
                         capture_message(
                             "warning",
-                            f"Все найденные лица на {photo_file.filename} меньше минимальной ширины {MIN_WIDTH_PHOTO}px",
+                            f"Все найденные лица на {photo_file.filename} меньше минимальной ширины {FACE_WIDTH_MIN}px",
                         )
                         continue
 

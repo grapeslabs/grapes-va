@@ -414,14 +414,15 @@ class FRDatabase:
         with self._get_cursor(cursor_factory=RealDictCursor) as cursor:
             if user_id:
                 cursor.execute(
-                    "SELECT * FROM cameras WHERE user_id = %s AND status = 'active' ORDER BY created_at",
+                    "SELECT * FROM cameras WHERE user_id = %s ORDER BY created_at",
                     (user_id,),
                 )
             else:
                 cursor.execute(
-                    "SELECT * FROM cameras WHERE status = 'active' ORDER BY created_at"
+                    "SELECT * FROM cameras ORDER BY created_at"
                 )
             cameras = [dict(row) for row in cursor.fetchall()]
+
             return cameras
 
     def get_camera(self, cam_id: str) -> Optional[Dict]:
@@ -429,7 +430,10 @@ class FRDatabase:
         with self._get_cursor(cursor_factory=RealDictCursor) as cursor:
             cursor.execute("SELECT * FROM cameras WHERE cam_id = %s", (cam_id,))
             row = cursor.fetchone()
-            return dict(row) if row else None
+            if row:
+                cam = dict(row)
+                return cam
+            return None
 
     def suspend_camera(self, cam_id: str) -> bool:
         """Помечает камеру как suspended (или удаляет)"""
@@ -637,10 +641,18 @@ class FRDatabase:
     def log_event(self, event_data: Dict) -> bool:
         try:
             # Базовые данные
+            
+            comment = ""
+            snapshot_path = event_data.get("snapshot_path")
+            
+            
             data_json = {
                 "camera_name": event_data.get("camera_name"),
                 "face_width": event_data.get("face_width"),
-                "snapshot_path": event_data.get("snapshot_path"),
+                "snapshot_path": snapshot_path,
+                "is_recognize": event_data.get("is_recognize"),
+                "face_snapshot_b64": event_data.get("face_snapshot_b64"),
+                "comment": comment
             }
 
             # Добавляем unknown_uuid, если это неизвестное лицо
@@ -650,17 +662,25 @@ class FRDatabase:
             # Убираем None значения
             data_json = {k: v for k, v in data_json.items() if v is not None}
 
-            # Для неизвестных лиц используем unknown_uuid
-            if event_data.get("is_unknown") and event_data.get("unknown_uuid"):
+            # 1. Если is_recognize=False → person_photobank_id = NULL (вектор не строился)
+            if not event_data.get("is_recognize", True):
+                person_photobank_id = None  # Нет персоны - нет ID
+                if "comment" not in data_json:
+                    data_json["comment"] = "распознавание отключено"
+            # 2. Если is_unknown=True и есть unknown_uuid → используем UUID
+            elif event_data.get("is_unknown") and event_data.get("unknown_uuid"):
                 person_photobank_id = event_data.get("unknown_uuid")
-            # Для известных лиц используем person_id, если есть
+            # 3. Если есть person_id → используем ID
             elif event_data.get("person_id"):
                 person_photobank_id = event_data.get("person_id")
-            # Если ни того, ни другого нет - генерируем UUID (крайний случай)
+            # 4. Иначе → генерируем UUID (крайний случай)
             else:
                 person_photobank_id = str(uuid.uuid4())
 
             is_unknown = event_data.get("is_unknown", person_photobank_id == "")
+            
+            if not data_json["face_snapshot_b64"]:
+                data_json["comment"] += " | полный процесс распознавания, аватара не сохранялась"
 
             with self._get_cursor() as cursor:
                 cursor.execute(
