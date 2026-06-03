@@ -651,7 +651,6 @@ class FRDatabase:
                 "face_width": event_data.get("face_width"),
                 "snapshot_path": snapshot_path,
                 "is_recognize": event_data.get("is_recognize"),
-                "face_snapshot_b64": event_data.get("face_snapshot_b64"),
                 "comment": comment
             }
 
@@ -679,9 +678,6 @@ class FRDatabase:
 
             is_unknown = event_data.get("is_unknown", person_photobank_id == "")
             
-            if not data_json.get("face_snapshot_b64"):
-                data_json["comment"] += " | полный процесс распознавания, аватара не сохранялась"
-
             with self._get_cursor() as cursor:
                 cursor.execute(
                     """

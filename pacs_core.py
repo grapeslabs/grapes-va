@@ -227,31 +227,26 @@ def queue_worker(q, stop_event):
             )
 
             full_path = None
+            event_uuid = str(uuid.uuid4())
+            timestamp_str = datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
+            filename = f"{event_uuid}.jpeg"
 
             for idx, face in enumerate(faces):
                 face_width = face_widths[idx]
 
                 # Если только детекция без распознавания
                 if is_detection and not is_recognize:
-                    face_event_uuid = str(uuid.uuid4())
                     capture_message(
                         "debug",
                         f"Детекция лица без распознавания: камера={camera_name}",
                     )
 
-                    face_cv = cv2.cvtColor(np.array(face), cv2.COLOR_RGB2BGR)
-                    _, face_buffer = cv2.imencode(".jpg", face_cv)
-                    face_snapshot_b64 = base64.b64encode(face_buffer.tobytes()).decode(
-                        "utf-8"
-                    )
-
                     if DEFAULT_WRITE_THUMBNAILS:
-                        face_filename = f"{face_event_uuid}.jpeg"
-                        full_path = os.path.join(THUMBNAIL_PATH, face_filename)
+                        full_path = os.path.join(THUMBNAIL_PATH, filename)
                         cv2.imwrite(full_path, face_cv)
 
                     event_data = {
-                        "event_id": face_event_uuid,
+                        "event_id": event_uuid,
                         "datetime": timestamp,
                         "camera_id": camera_id,
                         "camera_name": camera_name,
@@ -262,7 +257,6 @@ def queue_worker(q, stop_event):
                         "snapshot_path": full_path,
                         "user_id": user_id,
                         "is_recognize": is_recognize,
-                        "face_snapshot_b64": face_snapshot_b64,
                     }
 
 
@@ -270,7 +264,7 @@ def queue_worker(q, stop_event):
                         db.log_event(event_data=event_data)
                         capture_message(
                             "info",
-                            f"Ивент записан: event={face_event_uuid}, камера={camera_name}",
+                            f"Ивент записан: event={event_uuid}, камера={camera_name}",
                         )
                     except Exception as e:
                         capture_message(
@@ -297,10 +291,11 @@ def queue_worker(q, stop_event):
                     # Сохраняем thumbnail
                     event_uuid = str(uuid.uuid4())
 
-                    face_cv = cv2.cvtColor(np.array(face), cv2.COLOR_RGB2BGR)
-                    filename = f"{event_uuid}.jpeg"
-                    full_path = os.path.join(THUMBNAIL_PATH, filename)
-                    cv2.imwrite(full_path, face_cv)
+                    if DEFAULT_WRITE_THUMBNAILS:
+                        filename = f"{event_uuid}.jpeg"
+                        full_path = os.path.join(THUMBNAIL_PATH, filename)
+                        face_cv = cv2.cvtColor(np.array(face), cv2.COLOR_RGB2BGR)
+                        cv2.imwrite(full_path, face_cv)
 
                     dtime_str = datetime.fromtimestamp(timestamp_num).strftime(
                         "%Y%m%d-%H%M%S-%f"
@@ -343,10 +338,6 @@ def queue_worker(q, stop_event):
                         )
 
                     # Запись в БД
-                    face_cv = cv2.cvtColor(np.array(face), cv2.COLOR_RGB2BGR)
-                    _, face_buffer = cv2.imencode(".jpg", face_cv)
-                    face_snapshot_b64 = base64.b64encode(face_buffer.tobytes()).decode("utf-8")
-
                     event_data = {
                         "event_id": event_uuid,
                         "datetime": timestamp,
@@ -359,7 +350,6 @@ def queue_worker(q, stop_event):
                         "snapshot_path": full_path,
                         "user_id": user_id,
                         "is_recognize": is_recognize,
-                        "face_snapshot_b64": face_snapshot_b64,
                     }
 
 
