@@ -121,6 +121,24 @@ CREATE INDEX IF NOT EXISTS analytics_events_person_photobank_id_idx ON analytics
 
 ALTER TABLE public.analytics_events OWNER TO postgres;
 
+
+-- ========== Таблица событий распознавания detection_figure ==========
+CREATE TABLE IF NOT EXISTS public.analytics_figure_events (
+    id BIGSERIAL PRIMARY KEY,
+    event_id VARCHAR(255) NOT NULL UNIQUE,
+    datetime TIMESTAMP NOT NULL,
+    camera_id VARCHAR(255) NOT NULL,
+    person_count INTEGER DEFAULT 0,
+    data JSONB,
+    snapshot_path TEXT,
+    user_id BIGINT,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS figure_events_datetime_idx ON analytics_figure_events(datetime);
+CREATE INDEX IF NOT EXISTS figure_events_camera_id_idx ON analytics_figure_events(camera_id);
+CREATE INDEX IF NOT EXISTS figure_events_event_id_idx ON analytics_figure_events(event_id);
+
 -- ========== Функция поиска/создания неизвестного лица ==========
 CREATE OR REPLACE FUNCTION public.find_or_create_by_vector(
     new_uuid text,

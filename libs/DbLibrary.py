@@ -679,7 +679,7 @@ class FRDatabase:
 
             is_unknown = event_data.get("is_unknown", person_photobank_id == "")
             
-            if not data_json["face_snapshot_b64"]:
+            if not data_json.get("face_snapshot_b64"):
                 data_json["comment"] += " | полный процесс распознавания, аватара не сохранялась"
 
             with self._get_cursor() as cursor:
@@ -703,6 +703,38 @@ class FRDatabase:
             return True
         except Exception as e:
             capture_message("error", f"Ошибка логирования события: {e}")
+            return False
+
+    def log_figure_event(self, event_data: dict):
+        import numpy as _np
+
+        def _convert(obj):
+            if isinstance(obj, dict):
+                return {k: _convert(v) for k, v in obj.items()}
+            if isinstance(obj, (list, tuple)):
+                return [_convert(v) for v in obj]
+            if isinstance(obj, _np.ndarray):
+                return obj.tolist()
+            if isinstance(obj, _np.integer):
+                return int(obj)
+            if isinstance(obj, _np.floating):
+                return float(obj)
+            return obj
+
+        event_data = _convert(event_data)
+        if isinstance(event_data.get("detection_data"), dict):
+            event_data["detection_data"] = json.dumps(event_data["detection_data"])
+        event_data["data"] = event_data.pop("detection_data", None)
+        query = """
+            INSERT INTO analytics_figure_events (event_id, datetime, camera_id, person_count, data, snapshot_path, user_id)
+            VALUES (%(event_id)s, %(datetime)s, %(camera_id)s, %(person_count)s, %(data)s, %(snapshot_path)s, %(user_id)s)
+        """
+        try:
+            with self._get_cursor() as cur:
+                cur.execute(query, event_data)
+            return True
+        except Exception as e:
+            capture_message("error", f"Ошибка записи фигурного события: {e}")
             return False
 
     def close_all_connections(self):

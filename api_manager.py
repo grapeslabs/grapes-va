@@ -15,11 +15,12 @@ import numpy as np
 import cv2
 from dotenv import load_dotenv
 
+from psycopg2.extras import RealDictCursor
+import atexit
+
 from libs.pinfacekirjasto.PinFace import PinFace
 from libs.DbLibrary import FRDatabase
 from libs.loglib import capture_message, shutdown
-from psycopg2.extras import RealDictCursor
-import atexit
 
 load_dotenv()
 
@@ -163,7 +164,9 @@ def camera_to_nested(cam: dict, mask_rtsp: bool = True) -> dict:
             "face_width_max": cam.get("face_width_max", FACE_WIDTH_MAX),
             "min_area": cam.get("motion_min_area", MOTION_MIN_AREA),
             "threshold": cam.get("motion_threshold", MOTION_THRESHOLD),
-            "moving_duration_after": cam.get("motion_record_after_time", MOTION_RECORD_AFTER_TIME),
+            "moving_duration_after": cam.get(
+                "motion_record_after_time", MOTION_RECORD_AFTER_TIME
+            ),
             "cache_face_time": cam.get("cache_face_time", CACHE_FACE_TIME),
             "cache_face_max": cam.get("cache_face_max", CACHE_FACE_MAX),
             "zone": cam.get("crop_params"),
@@ -172,7 +175,9 @@ def camera_to_nested(cam: dict, mask_rtsp: bool = True) -> dict:
         },
         "detection_figure": {
             "is_active": cam.get("detection_figure_active", False),
-            "direction": cam.get("detection_figure_direction", DETECTION_FIGURE_DIRECTION),
+            "direction": cam.get(
+                "detection_figure_direction", DETECTION_FIGURE_DIRECTION
+            ),
             "zones": cam.get("detection_figure_zones", []),
         },
         "debug": {
@@ -240,12 +245,16 @@ def create_camera():
     detection_face = data.get("detection_face", {})
     face_width_min = detection_face.get("FACE_WIDTH_MIN", FACE_WIDTH_MIN)
     face_width_max = detection_face.get("face_width_max", FACE_WIDTH_MAX)
-    timedelay = detection_face.get("timedelay", TIMEDELAY) or stream_info.get("timedelay", TIMEDELAY)
+    timedelay = detection_face.get("timedelay", TIMEDELAY) or stream_info.get(
+        "timedelay", TIMEDELAY
+    )
     resize = detection_face.get("resize", RESIZE) or stream_info.get("resize", RESIZE)
     detection_zone = detection_face.get("zone")
     is_detection = bool(detection_face.get("is_detection", IS_DETECTION))
     is_recognize = bool(detection_face.get("is_recognize", IS_RECOGNIZE))
-    moving_duration_after = detection_face.get("moving_duration_after", MOTION_RECORD_AFTER_TIME)
+    moving_duration_after = detection_face.get(
+        "moving_duration_after", MOTION_RECORD_AFTER_TIME
+    )
     cache_face_time = detection_face.get("cache_face_time", CACHE_FACE_TIME)
     cache_face_max = detection_face.get("cache_face_max", CACHE_FACE_MAX)
     threshold = float(detection_face.get("threshold", MOTION_THRESHOLD))
@@ -253,8 +262,12 @@ def create_camera():
 
     # === Секция detection_figure ===
     detection_figure = data.get("detection_figure", {})
-    detection_figure_active = bool(detection_figure.get("is_active", DETECTION_FIGURE_ACTIVE))
-    detection_figure_direction = detection_figure.get("direction", DETECTION_FIGURE_DIRECTION)
+    detection_figure_active = bool(
+        detection_figure.get("is_active", DETECTION_FIGURE_ACTIVE)
+    )
+    detection_figure_direction = detection_figure.get(
+        "direction", DETECTION_FIGURE_DIRECTION
+    )
     detection_figure_zones = detection_figure.get("zones", [])
 
     # === Секция debug ===
@@ -713,6 +726,8 @@ def delete_photo():
 
 
 @app.route("/api/events", methods=["GET"])
+@app.route("/api/v1/events", methods=["GET"])
+@app.route("/api/v1/events/faces", methods=["GET"])
 def get_events():
     if MODE != "pacs":
         return make_response(
@@ -746,6 +761,43 @@ def get_events():
         return make_response(True, {"events": rows, "count": len(rows)})
     except Exception as e:
         capture_message("error", f"Ошибка получения событий: {e}")
+        return make_response(False, message=str(e), status_code=500)
+
+
+@app.route("/api/v1/events/figures", methods=["GET"])
+def get_figure_events():
+    if MODE != "pacs":
+        return make_response(
+            False, message=f"Not using endpoints in mode {MODE}", status_code=404
+        )
+
+    limit = request.args.get("limit", default=100, type=int)
+    offset = request.args.get("offset", default=0, type=int)
+    camera_id = request.args.get("camera_id")
+    from_date = request.args.get("from")
+    to_date = request.args.get("to")
+
+    query = "SELECT * FROM analytics_figure_events WHERE 1=1"
+    params = []
+    if camera_id:
+        query += " AND camera_id = %s"
+        params.append(camera_id)
+    if from_date:
+        query += " AND datetime >= %s"
+        params.append(from_date)
+    if to_date:
+        query += " AND datetime <= %s"
+        params.append(to_date)
+    query += " ORDER BY datetime DESC LIMIT %s OFFSET %s"
+    params.extend([limit, offset])
+
+    try:
+        with fr_db._get_cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+        return make_response(True, {"events": rows, "count": len(rows)})
+    except Exception as e:
+        capture_message("error", f"Ошибка получения событий фигур: {e}")
         return make_response(False, message=str(e), status_code=500)
 
 

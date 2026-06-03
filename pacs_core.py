@@ -20,6 +20,8 @@ from dotenv import load_dotenv
 
 from libs.pinfacekirjasto.PinFace import PinFace
 from libs.detect_motion import MotionDetector
+from libs.PersonDetector import PersonDetector
+
 from libs.loglib import capture_message, shutdown
 from libs.DbLibrary import FRDatabase
 from libs.camstream import VideoCapture
@@ -31,7 +33,7 @@ load_dotenv()
 
 try:
     pFace = PinFace(ffmode="mtcnn", frmode="adaface", fmode=["sface"])
-    capture_message("info", "PinFace initialized successfully")
+    capture_message("debug", "PinFace initialized successfully")
 except Exception as e:
     capture_message("error", f"Failed to initialize PinFace: {e}")
     raise SystemExit(1)
@@ -40,7 +42,6 @@ atexit.register(shutdown)
 
 # FixedSizeList для коротких векторов sface (128)
 face_short_cache = FixedSizeList(max_size=50, time_len=5)
-EUCLIDIAN_DISTANCE_SEPARATING = 0.9
 
 try:
     db = FRDatabase()
@@ -49,6 +50,8 @@ except Exception as e:
     capture_message("error", f"Failed to connect to database: {e}")
     raise SystemExit(1)
 
+
+EUCLIDIAN_DISTANCE_SEPARATING = 0.9
 DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true"
 MODE = os.getenv("MODE", "pacs")
 MIN_WIDTH_PHOTO = int(os.getenv("MIN_WIDTH_PHOTO", "50"))
@@ -112,7 +115,7 @@ cameras_lock = threading.Lock()
 shared_queue = None
 
 capture_message("info", f"PACS mode = {MODE}", force_sentry=True)
-if MODE == "pacs":    
+if MODE == "pacs":
     MODE_SUB = "pacs"
 elif MODE == "pin":
     MODE_SUB = "detection"
@@ -122,6 +125,28 @@ elif MODE == "pin":
         if sys.argv[1].lower() == "--recognize":
             MODE_SUB = "recognize"
     capture_message("info", f"PACS mode_sub = {MODE_SUB}", force_sentry=True)
+
+
+# 270526 -->
+def figure_queue_worker(q, stop_event):
+    while not stop_event.is_set():
+        try:
+            data = q.get(timeout=0.3)
+            if data is None:
+                break
+            if not DEBUG_MODE:
+                db.log_figure_event(data)
+            capture_message(
+                "info",
+                f"Figure event saved: {data['event_id']}, cam={data['camera_name']}, persons={data['person_count']}",
+            )
+        except queue.Empty:
+            continue
+        except Exception as e:
+            capture_message("error", f"Figure queue worker error: {e}")
+
+
+# 270526 <---
 
 
 def fetch_cameras_from_db():
@@ -193,7 +218,8 @@ def queue_worker(q, stop_event):
             timestamp = datetime.fromtimestamp(timestamp_num)
 
             # Получаем параметры камеры
-            cam_params = cameras.get(camera_id, {})
+            cam_proc = cameras.get(camera_id)
+            cam_params = cam_proc.config if cam_proc else {}
             is_detection = cam_params.get("is_detection", DEFAULT_IS_DETECTION)
             is_recognize = cam_params.get("is_recognize", DEFAULT_IS_RECOGNIZE)
             detection_figure_active = cam_params.get(
@@ -201,17 +227,15 @@ def queue_worker(q, stop_event):
             )
 
             full_path = None
-
-            # detection_figure_active - отдельный блок
-            if detection_figure_active:
-                pass  # TODO: реализовать логику detection_figure
+            event_uuid = str(uuid.uuid4())
+            timestamp_str = datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
+            filename = f"{event_uuid}.jpeg"
 
             for idx, face in enumerate(faces):
                 face_width = face_widths[idx]
 
                 # Если только детекция без распознавания
                 if is_detection and not is_recognize:
-                    # TODO: уточнить логику записи в неизвестные
                     capture_message(
                         "debug",
                         f"Детекция лица без распознавания: камера={camera_name}",
@@ -403,6 +427,14 @@ class CameraProcessor(threading.Thread):
             "detection_figure_direction", DEFAULT_DETECTION_FIGURE_DIRECTION
         )
         self.detection_figure_zones = cam_config.get("detection_figure_zones")
+
+        # 270526 -->
+        if not self.detection_figure_zones:
+            self.detection_figure_zones = cam_config.get("crop_params")
+        # <---
+
+        self.figure_detector = None
+
         self.write_thumbnails = cam_config.get(
             "write_thumbnails", DEFAULT_WRITE_THUMBNAILS
         )
@@ -415,19 +447,47 @@ class CameraProcessor(threading.Thread):
 
     def run(self):
         try:
-            cap = VideoCapture(self.stream_url, self.camera_id)
+
+            # 270526 -->
+            cap = VideoCapture(
+                self.stream_url,
+                self.camera_id,
+                resize=self.resize,
+                crop_params=self.detection_figure_zones,
+            )
+
+            # 270526 <--
         except Exception as e:
             capture_message(
                 "error", f"Ошибка создания VideoCapture для камеры {self.cam_name}: {e}"
             )
             return
 
+        # 250526 -->
+        if self.detection_figure_active:
+            try:
+                self.figure_detector = PersonDetector("m")
+                capture_message("debug", "Распознавание фигур инициализировано успешно")
+            except Exception as e:
+                capture_message(
+                    "error",
+                    f"Ошибка при инициализации FigureDetector, cam_id={self.camera_id}",
+                )
+
+        # 250526 <--
+
         # Инициализация детектора движения
-        motion_detector = MotionDetector(
-            min_area=self.motion_min_area,
-            threshold=self.motion_threshold,
-            record_after_time=self.motion_record_after_time,
-        )
+        try:
+            motion_detector = MotionDetector(
+                min_area=self.motion_min_area,
+                threshold=self.motion_threshold,
+                record_after_time=self.motion_record_after_time,
+            )
+        except Exception as e:
+            capture_message(
+                "error",
+                f"Ошибка при инициализации MotionDetector, cam_id={self.camera_id}",
+            )
 
         while self.running:
 
@@ -450,6 +510,48 @@ class CameraProcessor(threading.Thread):
             # Далее – только при активной записи
             self.frames_processed += 1
             start_time = time.time()
+
+            # 250526 -->
+            if self.detection_figure_active and self.figure_detector:
+                boxes_person, annotated_frame = self.figure_detector.detect_in_frame(
+                    frame, thickness=2, putTextinfo=True
+                )
+                person_count = len(boxes_person)
+                if person_count > 0:
+                    event_uuid = str(uuid.uuid4())
+                    timestamp = datetime.now()
+                    snapshot_path = ""
+
+                    detection_data = {
+                        "boxes": boxes_person,
+                        "direction": self.detection_figure_direction,
+                        "zones": self.detection_figure_zones,
+                    }
+
+                    if self.write_frame:
+                        # сохранение кадра на диск
+                        filename = f"{event_uuid}.jpg"
+                        snapshot_path = os.path.join(self.events_dir_path, filename)
+                        cv2.imwrite(snapshot_path, annotated_frame)
+
+                    # кодирование в base64 и добавление в JSON
+                    _, buffer = cv2.imencode(".jpg", annotated_frame)
+                    detection_data["frame_base64"] = base64.b64encode(buffer).decode(
+                        "utf-8"
+                    )
+
+                    figure_data = {
+                        "event_id": event_uuid,
+                        "datetime": timestamp,
+                        "camera_id": self.camera_id,
+                        "camera_name": self.cam_name,
+                        "user_id": self.user_id,
+                        "person_count": person_count,
+                        "detection_data": detection_data,
+                        "snapshot_path": snapshot_path,
+                    }
+                    figure_queue.put_nowait(figure_data)
+            # <--
 
             bboxes, faces, _ = pFace.face_detection(frame)
 
@@ -521,14 +623,10 @@ def camera_polling_thread(stop_event):
                     cam_id = cam["cam_id"]
                     if cam_id not in cameras:
 
-                        if not (
-                            cam["is_detection"]
-                            and cam["is_recognize"]
-                            and cam["detection_figure_active"]
-                        ):
+                        if not cam["is_detection"] and not cam["is_recognize"]:
                             capture_message(
                                 "info",
-                                f"Камера {cam['name']}  не добавлена. Параметры is_detection, is_recognize, detection_figure_active отключены",
+                                f"Камера {cam['name']} не добавлена. Параметры is_detection и is_recognize отключены",
                             )
                             continue
 
@@ -566,6 +664,15 @@ def mode_pacs():
     shared_queue = queue.Queue(maxsize=1000)
     stop_event = threading.Event()
 
+    # 270526 -->
+    global figure_queue
+    figure_queue = queue.Queue(maxsize=500)
+    figure_thread = threading.Thread(
+        target=figure_queue_worker, args=(figure_queue, stop_event)
+    )
+    figure_thread.start()
+    # 270526 <--
+
     queue_thread = threading.Thread(
         target=queue_worker, args=(shared_queue, stop_event)
     )
@@ -589,12 +696,11 @@ def mode_pacs():
             for proc in cameras.values():
                 proc.join(timeout=5)
 
-
         queue_thread.join()
-
+        figure_thread.join()
         poll_thread.join()
         db.close_all_connections()
-        
+
 
 def mode_pin():
     ### для пина
@@ -603,14 +709,14 @@ def mode_pin():
 
 if __name__ == "__main__":
     capture_message("info", "PACS Core starting...", force_sentry=True)
-    
+
     if not os.path.exists("events") and DEFAULT_WRITE_FRAME:
         os.mkdir("events")
 
     if MODE == "pacs":
         mode_pacs()
-        
+
     elif MODE == "pin":
         mode_pin()
-        
+
     capture_message("info", "PACS Core stopped", force_sentry=True)

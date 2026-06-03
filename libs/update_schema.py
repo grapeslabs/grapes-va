@@ -143,6 +143,41 @@ migrations: List[Tuple[str, str, str]] = [
         'pacs',
         "Создание индекса по полю person_photobank_id в таблице analytics_events "
         "для ускорения выборки событий по конкретному лицу."
+    ), 
+
+    (
+        """
+        CREATE TABLE IF NOT EXISTS public.analytics_figure_events (
+            id BIGSERIAL PRIMARY KEY,
+            event_id VARCHAR(255) NOT NULL UNIQUE,
+            datetime TIMESTAMP NOT NULL,
+            camera_id VARCHAR(255) NOT NULL,
+            person_count INTEGER DEFAULT 0,
+            data JSONB,
+            snapshot_path TEXT,
+            user_id BIGINT,
+            created_at TIMESTAMP DEFAULT NOW()
+        );
+        """,
+        'pacs',
+        "Создание таблицы analytics_figure_events для событий детекции фигур. Кадр в base64 будет внутри detection_data."
+        'pacs',
+        "Создание таблицы analytics_figure_events для хранения событий детекции фигур людей."
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS figure_events_datetime_idx ON analytics_figure_events(datetime);",
+        'pacs',
+        "Индекс по datetime для analytics_figure_events."
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS figure_events_camera_id_idx ON analytics_figure_events(camera_id);",
+        'pacs',
+        "Индекс по camera_id для analytics_figure_events."
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS figure_events_event_id_idx ON analytics_figure_events(event_id);",
+        'pacs',
+        "Индекс по event_id для analytics_figure_events (дополнительно к UNIQUE)."
     ),
 
 ]
