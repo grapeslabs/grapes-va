@@ -134,8 +134,8 @@ def figure_queue_worker(q, stop_event):
             data = q.get(timeout=0.3)
             if data is None:
                 break
-            if not DEBUG_MODE:
-                db.log_figure_event(data)
+
+            db.log_figure_event(data)
             capture_message(
                 "info",
                 f"Figure event saved: {data['event_id']}, cam={data['camera_name']}, persons={data['person_count']}",
@@ -266,17 +266,17 @@ def queue_worker(q, stop_event):
                         "face_snapshot_b64": face_snapshot_b64,
                     }
 
-                    if not DEBUG_MODE:
-                        try:
-                            db.log_event(event_data=event_data)
-                            capture_message(
-                                "info",
-                                f"Ивент записан: event={event_uuid}, камера={camera_name}",
-                            )
-                        except Exception as e:
-                            capture_message(
-                                "error", f"Событие не записано. Ошибка: {e}"
-                            )
+
+                    try:
+                        db.log_event(event_data=event_data)
+                        capture_message(
+                            "info",
+                            f"Ивент записан: event={event_uuid}, камера={camera_name}",
+                        )
+                    except Exception as e:
+                        capture_message(
+                            "error", f"Событие не записано. Ошибка: {e}"
+                        )
 
                     continue
 
@@ -345,6 +345,10 @@ def queue_worker(q, stop_event):
                         )
 
                     # Запись в БД
+                    face_cv = cv2.cvtColor(np.array(face), cv2.COLOR_RGB2BGR)
+                    _, face_buffer = cv2.imencode(".jpg", face_cv)
+                    face_snapshot_b64 = base64.b64encode(face_buffer.tobytes()).decode("utf-8")
+
                     event_data = {
                         "event_id": event_uuid,
                         "datetime": timestamp,
@@ -357,19 +361,20 @@ def queue_worker(q, stop_event):
                         "snapshot_path": full_path,
                         "user_id": user_id,
                         "is_recognize": is_recognize,
+                        "face_snapshot_b64": face_snapshot_b64,
                     }
 
-                    if not DEBUG_MODE:
-                        if db.log_event(event_data):
-                            status = "распознан" if recognized else "неизвестный"
-                            capture_message(
-                                "info",
-                                f"Ивент записан: event={event_uuid}, {status}, камера={camera_name}, person_id={person_id or 'N/A'}",
-                            )
-                        else:
-                            capture_message(
-                                "error", f"Ошибка записи события {event_uuid} в БД"
-                            )
+
+                    if db.log_event(event_data):
+                        status = "распознан" if recognized else "неизвестный"
+                        capture_message(
+                            "info",
+                            f"Ивент записан: event={event_uuid}, {status}, камера={camera_name}, person_id={person_id or 'N/A'}",
+                        )
+                    else:
+                        capture_message(
+                            "error", f"Ошибка записи события {event_uuid} в БД"
+                        )
                 else:
                     # Лицо уже было в последние 5 секунд - пропускаем
                     capture_message(
