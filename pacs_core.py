@@ -236,17 +236,21 @@ def queue_worker(q, stop_event):
 
                 # Если только детекция без распознавания
                 if is_detection and not is_recognize:
+                    face_event_uuid = str(uuid.uuid4())
                     capture_message(
                         "debug",
                         f"Детекция лица без распознавания: камера={camera_name}",
                     )
 
-                    if DEFAULT_WRITE_THUMBNAILS:
-                        full_path = os.path.join(THUMBNAIL_PATH, filename)
+                    face_cv = cv2.cvtColor(np.array(face), cv2.COLOR_RGB2BGR)
+                    face_filename = f"{face_event_uuid}.jpeg"
+                    full_path = os.path.join(THUMBNAIL_PATH, face_filename)
+                    
+                    if DEFAULT_WRITE_FRAME:
                         cv2.imwrite(full_path, face_cv)
 
                     event_data = {
-                        "event_id": event_uuid,
+                        "event_id": face_event_uuid,
                         "datetime": timestamp,
                         "camera_id": camera_id,
                         "camera_name": camera_name,
@@ -291,10 +295,11 @@ def queue_worker(q, stop_event):
                     # Сохраняем thumbnail
                     event_uuid = str(uuid.uuid4())
 
+                    filename = f"{event_uuid}.jpeg"
+                    full_path = os.path.join(THUMBNAIL_PATH, filename)
+                    face_cv = cv2.cvtColor(np.array(face), cv2.COLOR_RGB2BGR)
+
                     if DEFAULT_WRITE_THUMBNAILS:
-                        filename = f"{event_uuid}.jpeg"
-                        full_path = os.path.join(THUMBNAIL_PATH, filename)
-                        face_cv = cv2.cvtColor(np.array(face), cv2.COLOR_RGB2BGR)
                         cv2.imwrite(full_path, face_cv)
 
                     dtime_str = datetime.fromtimestamp(timestamp_num).strftime(

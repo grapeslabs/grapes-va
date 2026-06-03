@@ -160,9 +160,7 @@ migrations: List[Tuple[str, str, str]] = [
         );
         """,
         'pacs',
-        "Создание таблицы analytics_figure_events для событий детекции фигур. Кадр в base64 будет внутри detection_data."
-        'pacs',
-        "Создание таблицы analytics_figure_events для хранения событий детекции фигур людей."
+        "Создание таблицы analytics_figure_events для событий детекции фигур."
     ),
     (
         "CREATE INDEX IF NOT EXISTS figure_events_datetime_idx ON analytics_figure_events(datetime);",
