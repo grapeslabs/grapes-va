@@ -441,9 +441,7 @@ class CameraProcessor(threading.Thread):
         self.write_frame = cam_config.get("write_frame", DEFAULT_WRITE_FRAME)
 
         self.events_dir_path = f"events/{self.cam_name}"
-
-        if not os.path.exists(self.events_dir_path):
-            os.mkdir(self.events_dir_path)
+        os.makedirs(self.events_dir_path, exist_ok=True)
 
     def run(self):
         try:
