@@ -78,6 +78,7 @@ TIMEDELAY = int(os.getenv("TIMEDELAY", 333))
 MOTION_MIN_AREA = int(os.getenv("MOTION_MIN_AREA", "500"))
 MOTION_THRESHOLD = int(os.getenv("MOTION_THRESHOLD", "25"))
 MOTION_RECORD_AFTER_TIME = int(os.getenv("MOTION_RECORD_AFTER_TIME", "3"))
+RECONNECT_DELAY = 600  # 10 минут
 
 os.makedirs(THUMBNAIL_PATH, exist_ok=True)
 
@@ -438,21 +439,26 @@ class CameraProcessor(threading.Thread):
         os.makedirs(self.events_dir_path, exist_ok=True)
 
     def run(self):
-        try:
+        cap = None
+        while self.running:
+            try:
+                cap = VideoCapture(
+                    self.stream_url,
+                    self.camera_id,
+                    resize=self.resize,
+                    crop_params=self.detection_figure_zones,
+                )
+                break
+            except Exception as e:
+                capture_message(
+                    "error", f"Камера {self.cam_name}: не удалось подключиться: {e}"
+                )
+                for _ in range(RECONNECT_DELAY):
+                    if not self.running:
+                        return
+                    time.sleep(1)
 
-            # 270526 -->
-            cap = VideoCapture(
-                self.stream_url,
-                self.camera_id,
-                resize=self.resize,
-                crop_params=self.detection_figure_zones,
-            )
-
-            # 270526 <--
-        except Exception as e:
-            capture_message(
-                "error", f"Ошибка создания VideoCapture для камеры {self.cam_name}: {e}"
-            )
+        if cap is None:
             return
 
         # 250526 -->
@@ -637,8 +643,19 @@ def camera_polling_thread(stop_event):
                             != cam.get("motion_threshold")
                             or old.get("motion_record_after_time")
                             != cam.get("motion_record_after_time")
+                            or old.get("is_detection") != cam.get("is_detection")
+                            or old.get("is_recognize") != cam.get("is_recognize")
+                            or old.get("detection_figure_active")
+                            != cam.get("detection_figure_active")
+                            or old.get("detection_figure_zones")
+                            != cam.get("detection_figure_zones")
+                            or old.get("resize") != cam.get("resize")
+                            or old.get("crop_params") != cam.get("crop_params")
+                            or old.get("write_thumbnails")
+                            != cam.get("write_thumbnails")
+                            or old.get("write_frame") != cam.get("write_frame")
                         ):
-                            capture_message("info", f"Камера {cam_id} изменена")
+                            capture_message("info", f"Камера {cam_id} изменена — перезапуск")
                             cameras[cam_id].running = False
                             cameras[cam_id].join(timeout=5)
                             proc = CameraProcessor(cam, shared_queue)
