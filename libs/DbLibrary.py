@@ -414,7 +414,7 @@ class FRDatabase:
         with self._get_cursor(cursor_factory=RealDictCursor) as cursor:
             if user_id:
                 cursor.execute(
-                    "SELECT * FROM cameras WHERE user_id = %s ORDER BY created_at",
+                    "SELECT * FROM cameras WHERE user_id = %s AND (status IS NULL OR status != 'suspended') ORDER BY created_at",
                     (user_id,),
                 )
             else:

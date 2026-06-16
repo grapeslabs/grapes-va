@@ -232,6 +232,10 @@ def queue_worker(q, stop_event):
             timestamp_str = datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
             filename = f"{event_uuid}.jpeg"
 
+            
+            if not is_detection and not detection_figure_active:
+                continue
+            
             for idx, face in enumerate(faces):
                 face_width = face_widths[idx]
 
@@ -262,7 +266,6 @@ def queue_worker(q, stop_event):
                         "is_recognize": is_recognize,
                     }
 
-
                     try:
                         db.log_event(event_data=event_data)
                         capture_message(
@@ -270,9 +273,7 @@ def queue_worker(q, stop_event):
                             f"Ивент записан: event={event_uuid}, камера={camera_name}",
                         )
                     except Exception as e:
-                        capture_message(
-                            "error", f"Событие не записано. Ошибка: {e}"
-                        )
+                        capture_message("error", f"Событие не записано. Ошибка: {e}")
 
                     continue
 
@@ -353,7 +354,6 @@ def queue_worker(q, stop_event):
                         "user_id": user_id,
                         "is_recognize": is_recognize,
                     }
-
 
                     if db.log_event(event_data):
                         status = "распознан" if recognized else "неизвестный"
@@ -461,10 +461,17 @@ class CameraProcessor(threading.Thread):
         if cap is None:
             return
 
+        if not self.is_detection and not self.detection_figure_active:
+            capture_message("info", f"Камера {self.cam_name}: is_detection и detection_figure_active отключены, поток останавливается")
+            self.running = False
+            cap.stop()
+            return
+
+        
         # 250526 -->
         if self.detection_figure_active:
             try:
-                self.figure_detector = PersonDetector("m")
+                self.figure_detector = PersonDetector(model_size="m", model_path="pretrained/detection_figure_model.pt")
                 capture_message("debug", "Распознавание фигур инициализировано успешно")
             except Exception as e:
                 capture_message(
@@ -474,6 +481,7 @@ class CameraProcessor(threading.Thread):
 
         # 250526 <--
 
+        motion_detector = None
         # Инициализация детектора движения
         try:
             motion_detector = MotionDetector(
@@ -486,8 +494,12 @@ class CameraProcessor(threading.Thread):
                 "error",
                 f"Ошибка при инициализации MotionDetector, cam_id={self.camera_id}",
             )
+            cap.stop()
+            return
 
         while self.running:
+            
+
 
             frame = cap.read()
 
@@ -551,41 +563,42 @@ class CameraProcessor(threading.Thread):
                     figure_queue.put_nowait(figure_data)
             # <--
 
-            bboxes, faces, _ = pFace.face_detection(frame)
+            if self.is_detection or self.is_recognize:
+                bboxes, faces, _ = pFace.face_detection(frame)
 
-            if faces:
-                event_timestamp = datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
-                filtered_faces = []
-                face_widths = []
-                for b, f in zip(bboxes, faces):
-                    w = int(b[2] - b[0])
-                    if w >= self.face_width_min:
-                        filtered_faces.append(f)
-                        face_widths.append(w)
+                if faces:
+                    event_timestamp = datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
+                    filtered_faces = []
+                    face_widths = []
+                    for b, f in zip(bboxes, faces):
+                        w = int(b[2] - b[0])
+                        if w >= self.face_width_min:
+                            filtered_faces.append(f)
+                            face_widths.append(w)
 
-                if filtered_faces:
-                    self.faces_detected += len(filtered_faces)
-                    if MODE == "pacs":
-                        self.shared_queue.put_nowait(
-                            (
-                                time.time(),
-                                self.camera_id,
-                                self.cam_name,
-                                self.user_id,
-                                filtered_faces,
-                                face_widths,
-                                self.config.get("stream_id", ""),
+                    if filtered_faces:
+                        self.faces_detected += len(filtered_faces)
+                        if MODE == "pacs":
+                            self.shared_queue.put_nowait(
+                                (
+                                    time.time(),
+                                    self.camera_id,
+                                    self.cam_name,
+                                    self.user_id,
+                                    filtered_faces,
+                                    face_widths,
+                                    self.config.get("stream_id", ""),
+                                )
                             )
-                        )
-                    elif MODE == "pin":
-                        # запись в очередь rabbitMQ
-                        pass
+                        elif MODE == "pin":
+                            # запись в очередь rabbitMQ
+                            pass
 
-                    if DEFAULT_WRITE_FRAME:
-                        cv2.imwrite(
-                            f"{self.events_dir_path}/{self.camera_id}_{event_timestamp}.jpg",
-                            frame,
-                        )
+                        if DEFAULT_WRITE_FRAME:
+                            cv2.imwrite(
+                                f"{self.events_dir_path}/{self.camera_id}_{event_timestamp}.jpg",
+                                frame,
+                            )
 
             elapsed = time.time() - start_time
             remaining = self.timedelay - elapsed
@@ -621,19 +634,26 @@ def camera_polling_thread(stop_event):
                     cam_id = cam["cam_id"]
                     if cam_id not in cameras:
 
-                        if not cam["is_detection"] and not cam["is_recognize"]:
+                        if not cam["is_detection"] and not cam.get("detection_figure_active", False):
                             capture_message(
                                 "info",
-                                f"Камера {cam['name']} не добавлена. Параметры is_detection и is_recognize отключены",
+                                f"Камера {cam['name']} не добавлена. Параметры is_detection и detection_figure_active отключены",
                             )
                             continue
 
-                        capture_message("info", f"Камера {cam['name']} добавлена")
+                        capture_message("info", f"Камера {cam['name']} добавлена. is_detection = {cam['is_detection']}, is_recognize = {cam['is_recognize']}, detection_figure_active = {cam['detection_figure_active']}")
                         proc = CameraProcessor(cam, shared_queue)
                         proc.start()
                         cameras[cam_id] = proc
+
                     else:
+                        if not cameras[cam_id].is_alive():
+                            capture_message("info", f"Камера {cam_id}: поток завершился, очистка")
+                            del cameras[cam_id]
+                            continue
+                        
                         old = cameras[cam_id].config
+                        
                         if (
                             old["stream_to_parse"] != cam["stream_to_parse"]
                             or old.get("face_width_min") != cam.get("face_width_min")
@@ -655,12 +675,22 @@ def camera_polling_thread(stop_event):
                             != cam.get("write_thumbnails")
                             or old.get("write_frame") != cam.get("write_frame")
                         ):
-                            capture_message("info", f"Камера {cam_id} изменена — перезапуск")
-                            cameras[cam_id].running = False
-                            cameras[cam_id].join(timeout=5)
-                            proc = CameraProcessor(cam, shared_queue)
-                            proc.start()
-                            cameras[cam_id] = proc
+                            if not cam["is_detection"] and not cam.get("detection_figure_active", False):
+                                capture_message(
+                                    "info", f"Камера {cam_id} остановлена: is_detection и detection_figure_active отключены"
+                                )
+                                cameras[cam_id].running = False
+                                cameras[cam_id].join(timeout=5)
+                                del cameras[cam_id]
+                            else:
+                                capture_message(
+                                    "info", f"Камера {cam_id} изменена — перезапуск"
+                                )
+                                cameras[cam_id].running = False
+                                cameras[cam_id].join(timeout=5)
+                                proc = CameraProcessor(cam, shared_queue)
+                                proc.start()
+                                cameras[cam_id] = proc
         except Exception as e:
             capture_message("error", f"Ошибка в потоке опроса камер: {e}")
 
