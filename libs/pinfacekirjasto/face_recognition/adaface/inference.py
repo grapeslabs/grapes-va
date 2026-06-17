@@ -44,7 +44,7 @@ def load_pretrained_model(architecture=arch):
     # kkk
     # statedict = torch.load(adaface_models[architecture])['state_dict']
     statedict = torch.load(
-        adaface_models[architecture], map_location=load_model_cpu, weights_only=True
+        adaface_models[architecture], map_location=load_model_cpu, weights_only=False
     )["state_dict"]
     # statedict = torch.load(adaface_models[architecture], map_location=load_model_cpu, weights_only=True)['state_dict']
 
